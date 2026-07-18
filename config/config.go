@@ -1023,6 +1023,7 @@ func (c *Config) validateInternal(permissive bool) error {
 	if len(c.Projects) == 0 {
 		return fmt.Errorf("config: at least one [[projects]] entry is required")
 	}
+	bridgeEnabled := c.Bridge.Enabled != nil && *c.Bridge.Enabled
 	for i, proj := range c.Projects {
 		prefix := fmt.Sprintf("projects[%d]", i)
 		if proj.Name == "" {
@@ -1031,7 +1032,11 @@ func (c *Config) validateInternal(permissive bool) error {
 		if proj.Agent.Type == "" {
 			return fmt.Errorf("config: %s.agent.type is required", prefix)
 		}
-		if len(proj.Platforms) == 0 && !permissive {
+		// BridgePlatform is attached dynamically during startup, after the
+		// project engines are created. A Bridge-only deployment therefore has no
+		// static [[projects.platforms]] entries, but is still a valid runnable
+		// configuration when [bridge].enabled is true.
+		if len(proj.Platforms) == 0 && !permissive && !bridgeEnabled {
 			return fmt.Errorf("config: %s needs at least one [[projects.platforms]]", prefix)
 		}
 		for j, p := range proj.Platforms {

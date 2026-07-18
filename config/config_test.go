@@ -11,6 +11,7 @@ import (
 )
 
 func TestConfigValidate(t *testing.T) {
+	bridgeEnabled := true
 	tests := []struct {
 		name    string
 		cfg     Config
@@ -55,6 +56,19 @@ func TestConfigValidate(t *testing.T) {
 				},
 			},
 			wantErr: `projects[0] needs at least one [[projects.platforms]]`,
+		},
+		{
+			name: "accepts bridge-only project when bridge enabled",
+			cfg: Config{
+				Bridge: BridgeConfig{Enabled: &bridgeEnabled},
+				Projects: []ProjectConfig{
+					func() ProjectConfig {
+						p := validProject("bridge-only")
+						p.Platforms = nil
+						return p
+					}(),
+				},
+			},
 		},
 		{
 			name: "requires platform type",

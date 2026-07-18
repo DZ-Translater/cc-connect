@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+cc-connect
+dist
+build
+coverage.out
+node_modules
+web/node_modules
+web/dist
+deploy/bridge/.env
+deploy/bridge/data
+deploy/bridge/workspaces
+deploy/bridge/skills/*
+!deploy/bridge/skills/.gitkeep
+*.log
+*.tmp
