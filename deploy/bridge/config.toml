@@ -1,0 +1,55 @@
+# Single-tenant, Bridge-only deployment for dianzhan.
+# The bridge token is supplied by docker compose through CC_BRIDGE_TOKEN.
+data_dir = "/data"
+language = "zh"
+
+[bridge]
+enabled = true
+port = 9810
+token = "${CC_BRIDGE_TOKEN}"
+path = "/bridge/ws"
+
+[[providers]]
+name = "dianzhan-claude"
+api_key = "${ANTHROPIC_API_KEY}"
+base_url = "${ANTHROPIC_BASE_URL}"
+model = "${ANTHROPIC_MODEL}"
+agent_types = ["claudecode"]
+
+[[providers]]
+name = "dianzhan-codex"
+api_key = "${OPENAI_API_KEY}"
+base_url = "${OPENAI_BASE_URL}"
+model = "${CODEX_MODEL}"
+agent_types = ["codex"]
+
+[providers.codex]
+wire_api = "${CODEX_WIRE_API}"
+
+[[projects]]
+name = "dianzhan-claude"
+
+[projects.agent]
+type = "claudecode"
+provider_refs = ["dianzhan-claude"]
+
+[projects.agent.options]
+work_dir = "/workspace/dianzhan"
+# Fully automatic execution. Docker mounts and Linux permissions remain the
+# containment boundary for the agent process.
+mode = "bypassPermissions"
+provider = "dianzhan-claude"
+
+[[projects]]
+name = "dianzhan-codex"
+
+[projects.agent]
+type = "codex"
+provider_refs = ["dianzhan-codex"]
+
+[projects.agent.options]
+work_dir = "/workspace/dianzhan"
+# Automatic edits stay in Codex's workspace-write sandbox. Do not use yolo
+# unless unrestricted filesystem and network access is explicitly intended.
+mode = "full-auto"
+provider = "dianzhan-codex"

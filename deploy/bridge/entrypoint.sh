@@ -2,7 +2,9 @@
 set -eu
 
 : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}"
+: "${ANTHROPIC_BASE_URL:?ANTHROPIC_BASE_URL is required}"
 : "${OPENAI_API_KEY:?OPENAI_API_KEY is required}"
+: "${OPENAI_BASE_URL:?OPENAI_BASE_URL is required}"
 : "${CC_BRIDGE_TOKEN:?CC_BRIDGE_TOKEN is required}"
 
 mkdir -p "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$HOME/.agents"

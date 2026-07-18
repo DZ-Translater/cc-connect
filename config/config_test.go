@@ -3432,6 +3432,56 @@ func TestResolveProviderRefs_TOMLParsing(t *testing.T) {
 	}
 }
 
+func TestBridgeDeploymentConfig_UsesSeparateThirdPartyProviders(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://anthropic.example.test")
+	t.Setenv("ANTHROPIC_MODEL", "claude-test")
+	t.Setenv("OPENAI_API_KEY", "openai-test-key")
+	t.Setenv("OPENAI_BASE_URL", "https://openai.example.test/v1")
+	t.Setenv("CODEX_MODEL", "gpt-test")
+	t.Setenv("CODEX_WIRE_API", "responses")
+	t.Setenv("CC_BRIDGE_TOKEN", "bridge-test-token")
+
+	cfg, err := Load(filepath.Join("..", "deploy", "bridge", "config.toml"))
+	if err != nil {
+		t.Fatalf("load Bridge deployment config: %v", err)
+	}
+	if len(cfg.Providers) != 2 {
+		t.Fatalf("providers = %d, want 2", len(cfg.Providers))
+	}
+	if len(cfg.Projects) != 2 {
+		t.Fatalf("projects = %d, want 2", len(cfg.Projects))
+	}
+
+	claude := cfg.Projects[0]
+	if claude.Name != "dianzhan-claude" || claude.Agent.Type != "claudecode" {
+		t.Fatalf("unexpected Claude project: %+v", claude)
+	}
+	if len(claude.Agent.Providers) != 1 {
+		t.Fatalf("Claude providers = %d, want 1", len(claude.Agent.Providers))
+	}
+	if p := claude.Agent.Providers[0]; p.Name != "dianzhan-claude" || p.APIKey != "anthropic-test-key" || p.BaseURL != "https://anthropic.example.test" {
+		t.Fatalf("unexpected Claude provider: %+v", p)
+	}
+	if active, _ := claude.Agent.Options["provider"].(string); active != "dianzhan-claude" {
+		t.Fatalf("Claude active provider = %q", active)
+	}
+
+	codex := cfg.Projects[1]
+	if codex.Name != "dianzhan-codex" || codex.Agent.Type != "codex" {
+		t.Fatalf("unexpected Codex project: %+v", codex)
+	}
+	if len(codex.Agent.Providers) != 1 {
+		t.Fatalf("Codex providers = %d, want 1", len(codex.Agent.Providers))
+	}
+	if p := codex.Agent.Providers[0]; p.Name != "dianzhan-codex" || p.APIKey != "openai-test-key" || p.BaseURL != "https://openai.example.test/v1" || p.Codex == nil || p.Codex.WireAPI != "responses" {
+		t.Fatalf("unexpected Codex provider: %+v", p)
+	}
+	if active, _ := codex.Agent.Options["provider"].(string); active != "dianzhan-codex" {
+		t.Fatalf("Codex active provider = %q", active)
+	}
+}
+
 func TestRemoveGlobalProvider_CleansUpProviderRefs(t *testing.T) {
 	input := `
 [[providers]]

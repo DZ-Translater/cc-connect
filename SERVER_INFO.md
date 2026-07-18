@@ -21,7 +21,9 @@ ssh by
 cd /srv/cc-connect
 cp deploy/bridge/.env.example deploy/bridge/.env
 chmod 600 deploy/bridge/.env
-# Set ANTHROPIC_API_KEY, OPENAI_API_KEY, and CC_BRIDGE_TOKEN.
+# Set ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, OPENAI_API_KEY,
+# OPENAI_BASE_URL, and CC_BRIDGE_TOKEN. Optional model and wire API settings
+# are documented in deploy/bridge/.env.example.
 ```
 
 The server never builds this image. Pull the GitHub Actions image first, then

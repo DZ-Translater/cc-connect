@@ -40,6 +40,8 @@ vendor/
 config.toml
 config.*.toml
 !config.example.toml
+# The Bridge deployment template contains environment placeholders only.
+!deploy/bridge/config.toml
 .env
 *.local.toml
 

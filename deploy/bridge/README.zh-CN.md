@@ -6,11 +6,17 @@
 
 ```bash
 cp deploy/bridge/.env.example deploy/bridge/.env
-# 编辑 deploy/bridge/.env，填写两个模型 API Key 和强随机 Bridge Token。
+# 编辑 deploy/bridge/.env，填写两个模型 API Key、对应第三方 Base URL 和强随机 Bridge Token。
 mkdir -p deploy/bridge/workspaces/dianzhan deploy/bridge/skills
 ```
 
-镜像由 GitHub Actions 构建并发布到 GHCR，服务器不执行 Docker build。首次启动和后续更新均使用：
+`ANTHROPIC_BASE_URL` 必须是 Claude Code 所用的 Anthropic 兼容端点，
+`OPENAI_BASE_URL` 必须是 Codex 所用的 OpenAI 兼容端点（通常以 `/v1` 结尾）。
+配置会将 API Key 和 Base URL 分别绑定给 Claude Code 与 Codex。若上游指定模型名称，填入
+`ANTHROPIC_MODEL` 或 `CODEX_MODEL`；Codex 上游若仅支持 Chat Completions，则将
+`CODEX_WIRE_API` 从默认的 `responses` 改为 `chat`。
+
+镜像由 GitHub Actions 构建并发布到 Docker Hub，服务器不执行 Docker build。首次启动和后续更新均使用：
 
 ```bash
 docker compose --env-file deploy/bridge/.env -f docker-compose.bridge.yml pull
@@ -83,4 +89,4 @@ docker compose --env-file deploy/bridge/.env -f docker-compose.bridge.yml restar
 - 两个 project 共享 `dianzhan` 工作目录，但会话历史按 project 隔离。
 - Claude 使用 `bypassPermissions`，Codex 使用 `full-auto`；两者都会自动执行工具调用。
 - 这是逻辑隔离而非强文件系统隔离。不要挂载 Docker Socket、宿主机根目录、SSH 私钥或其他租户目录。
-- `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`CC_BRIDGE_TOKEN` 只存在于环境变量/本地 `.env`，不得提交。
+- `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、两个 Base URL 与 `CC_BRIDGE_TOKEN` 只存在于环境变量/本地 `.env`，不得提交。
