@@ -16,27 +16,29 @@ the management API, or the generic webhook server.
 The source and deployment files are staged at `/srv/cc-connect`. Configure
 the secrets on the server before starting the service:
 
+The contents of `deploy/bridge/` in the repository are copied directly into
+`/srv/cc-connect`; no nested `deploy/bridge` directory is used on the server.
+
 ```bash
 ssh by
 cd /srv/cc-connect
-cp deploy/bridge/.env.example deploy/bridge/.env
-chmod 600 deploy/bridge/.env
+cp .env.example .env
+chmod 600 .env
 # Set ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, OPENAI_API_KEY,
 # OPENAI_BASE_URL, and CC_BRIDGE_TOKEN. Optional model and wire API settings
-# are documented in deploy/bridge/.env.example.
+# are documented in .env.example.
 ```
 
 The server never builds this image. Pull the GitHub Actions image first, then
 start it:
 
 ```bash
-docker compose --env-file deploy/bridge/.env -f docker-compose.bridge.yml pull
-docker compose --env-file deploy/bridge/.env -f docker-compose.bridge.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
 The Bridge port defaults to loopback. Set `BRIDGE_BIND_ADDR` in
-`deploy/bridge/.env` only when a firewall and TLS reverse proxy protect the
-public endpoint.
+`.env` only when a firewall and TLS reverse proxy protect the public endpoint.
 
 ## Image Publishing And Updates
 

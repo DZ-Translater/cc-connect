@@ -2,12 +2,25 @@
 
 此部署只运行 Claude Code 与 Codex，并只开放 cc-connect Bridge WebSocket；不需要配置飞书、Telegram 或其他 IM 平台。
 
+将本目录内容平铺到服务器部署目录。服务器最终结构如下：
+
+```text
+/srv/cc-connect/
+├── docker-compose.yml
+├── .env
+├── config.toml
+├── entrypoint.sh
+├── README.zh-CN.md
+├── skills/
+└── workspaces/dianzhan/
+```
+
 ## 启动
 
 ```bash
-cp deploy/bridge/.env.example deploy/bridge/.env
-# 编辑 deploy/bridge/.env，填写两个模型 API Key、对应第三方 Base URL 和强随机 Bridge Token。
-mkdir -p deploy/bridge/workspaces/dianzhan deploy/bridge/skills
+cp .env.example .env
+# 编辑 .env，填写两个模型 API Key、对应第三方 Base URL 和强随机 Bridge Token。
+mkdir -p workspaces/dianzhan skills
 ```
 
 `ANTHROPIC_BASE_URL` 必须是 Claude Code 所用的 Anthropic 兼容端点，
@@ -19,14 +32,14 @@ mkdir -p deploy/bridge/workspaces/dianzhan deploy/bridge/skills
 镜像由 GitHub Actions 构建并发布到 Docker Hub，服务器不执行 Docker build。首次启动和后续更新均使用：
 
 ```bash
-docker compose --env-file deploy/bridge/.env -f docker-compose.bridge.yml pull
-docker compose --env-file deploy/bridge/.env -f docker-compose.bridge.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
 Linux 主机上，工作目录必须允许容器内 UID `10001` 写入：
 
 ```bash
-sudo chown -R 10001:10001 deploy/bridge/workspaces/dianzhan
+sudo chown -R 10001:10001 workspaces/dianzhan
 ```
 
 Bridge 默认只绑定 `127.0.0.1:9810`。需要由其他机器连接时，应在反向代理后暴露 WebSocket，并通过防火墙限制来源；不要直接将端口公开到互联网。
@@ -73,7 +86,7 @@ ws://127.0.0.1:9810/bridge/ws?token=<CC_BRIDGE_TOKEN>
 把 Skill 放在 `${SKILLS_DIR}` 的一级子目录，格式如下：
 
 ```text
-deploy/bridge/skills/
+skills/
 └── review-pr/
     └── SKILL.md
 ```
@@ -81,7 +94,7 @@ deploy/bridge/skills/
 该目录在容器内以只读方式挂载到 `/skills`，启动脚本同时链接到 Claude 与 Codex 的原生 Skills 路径。变更 Skill 后重启容器：
 
 ```bash
-docker compose --env-file deploy/bridge/.env -f docker-compose.bridge.yml restart
+docker compose restart
 ```
 
 ## 运行边界

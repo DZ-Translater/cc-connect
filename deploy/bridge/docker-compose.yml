@@ -4,22 +4,22 @@ services:
     container_name: cc-connect-bridge
     restart: unless-stopped
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in deploy/bridge/.env}
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:?set ANTHROPIC_BASE_URL in deploy/bridge/.env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:?set ANTHROPIC_BASE_URL in .env}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in deploy/bridge/.env}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:?set OPENAI_BASE_URL in deploy/bridge/.env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:?set OPENAI_BASE_URL in .env}
       CODEX_MODEL: ${CODEX_MODEL:-}
       CODEX_WIRE_API: ${CODEX_WIRE_API:-responses}
-      CC_BRIDGE_TOKEN: ${CC_BRIDGE_TOKEN:?set CC_BRIDGE_TOKEN in deploy/bridge/.env}
+      CC_BRIDGE_TOKEN: ${CC_BRIDGE_TOKEN:?set CC_BRIDGE_TOKEN in .env}
       CC_INSTANCE_LOCK_DIR: /data/locks
     ports:
       - "${BRIDGE_BIND_ADDR:-127.0.0.1}:${BRIDGE_PORT:-9810}:9810"
     volumes:
       - cc-connect-data:/data
-      - ${DIANZHAN_WORKSPACE:-./deploy/bridge/workspaces/dianzhan}:/workspace/dianzhan:rw
-      - ${SKILLS_DIR:-./deploy/bridge/skills}:/skills:ro
-      - ./deploy/bridge/config.toml:/app/config/config.toml:ro
+      - ${DIANZHAN_WORKSPACE:-./workspaces/dianzhan}:/workspace/dianzhan:rw
+      - ${SKILLS_DIR:-./skills}:/skills:ro
+      - ./config.toml:/app/config/config.toml:ro
     read_only: true
     tmpfs:
       - /tmp:mode=1777,size=256m
