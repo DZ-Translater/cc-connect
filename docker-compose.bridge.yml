@@ -12,6 +12,7 @@ services:
       CODEX_MODEL: ${CODEX_MODEL:-}
       CODEX_WIRE_API: ${CODEX_WIRE_API:-responses}
       CC_BRIDGE_TOKEN: ${CC_BRIDGE_TOKEN:?set CC_BRIDGE_TOKEN in deploy/bridge/.env}
+      CC_INSTANCE_LOCK_DIR: /data/locks
     ports:
       - "${BRIDGE_BIND_ADDR:-127.0.0.1}:${BRIDGE_PORT:-9810}:9810"
     volumes:

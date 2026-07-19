@@ -20,8 +20,27 @@ func TestAcquireInstanceLock_Success(t *testing.T) {
 	}
 	defer lock.Release()
 
-	if lock.Path() == "" {
-		t.Fatal("expected non-empty lock path")
+	wantPath := filepath.Join(dir, ".config.toml.lock")
+	if lock.Path() != wantPath {
+		t.Fatalf("lock path = %q, want %q", lock.Path(), wantPath)
+	}
+}
+
+func TestAcquireInstanceLock_UsesConfiguredLockDir(t *testing.T) {
+	configDir := t.TempDir()
+	lockDir := filepath.Join(t.TempDir(), "locks")
+	cfg := filepath.Join(configDir, "config.toml")
+	t.Setenv(instanceLockDirEnv, lockDir)
+
+	lock, err := AcquireInstanceLock(cfg)
+	if err != nil {
+		t.Fatalf("AcquireInstanceLock: %v", err)
+	}
+	defer lock.Release()
+
+	wantPath := filepath.Join(lockDir, ".config.toml.lock")
+	if lock.Path() != wantPath {
+		t.Fatalf("lock path = %q, want %q", lock.Path(), wantPath)
 	}
 }
 

@@ -5,15 +5,14 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"syscall"
 )
 
 // InstanceLock provides a file-based exclusive lock to prevent multiple
 // cc-connect instances with the same config from running simultaneously.
 type InstanceLock struct {
-	file    *os.File
-	path    string
+	file     *os.File
+	path     string
 	acquired bool
 }
 
@@ -21,20 +20,14 @@ type InstanceLock struct {
 // If another instance is already running with the same config, it returns an error
 // containing the PID of the existing instance.
 //
-// The lock file is placed in the same directory as the config file, with a name
-// derived from the config path hash. This allows different configs to run simultaneously.
+// The lock file is placed in the same directory as the config file unless
+// CC_INSTANCE_LOCK_DIR overrides it for read-only configuration mounts.
 func AcquireInstanceLock(configPath string) (*InstanceLock, error) {
-	// Create lock file path based on config path
-	configDir := filepath.Dir(configPath)
-	configBase := filepath.Base(configPath)
-
-	// Use a predictable name based on config filename
-	lockName := fmt.Sprintf(".%s.lock", configBase)
-	lockPath := filepath.Join(configDir, lockName)
+	lockDir, lockPath := instanceLockPath(configPath)
 
 	// Ensure directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return nil, fmt.Errorf("cannot create config directory: %w", err)
+	if err := os.MkdirAll(lockDir, 0755); err != nil {
+		return nil, fmt.Errorf("cannot create lock directory: %w", err)
 	}
 
 	// Open/create the lock file
@@ -111,10 +104,7 @@ func readPIDFromLockFile(path string) int {
 // KillExistingInstance attempts to kill the process holding the lock for the given config.
 // Returns true if a process was killed, false otherwise.
 func KillExistingInstance(configPath string) bool {
-	configDir := filepath.Dir(configPath)
-	configBase := filepath.Base(configPath)
-	lockName := fmt.Sprintf(".%s.lock", configBase)
-	lockPath := filepath.Join(configDir, lockName)
+	_, lockPath := instanceLockPath(configPath)
 
 	pid := readPIDFromLockFile(lockPath)
 	if pid <= 0 {

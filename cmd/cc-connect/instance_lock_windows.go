@@ -5,7 +5,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -22,13 +21,10 @@ type InstanceLock struct {
 }
 
 func AcquireInstanceLock(configPath string) (*InstanceLock, error) {
-	configDir := filepath.Dir(configPath)
-	configBase := filepath.Base(configPath)
-	lockName := fmt.Sprintf(".%s.lock", configBase)
-	lockPath := filepath.Join(configDir, lockName)
+	lockDir, lockPath := instanceLockPath(configPath)
 
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return nil, fmt.Errorf("cannot create config directory: %w", err)
+	if err := os.MkdirAll(lockDir, 0755); err != nil {
+		return nil, fmt.Errorf("cannot create lock directory: %w", err)
 	}
 
 	pathPtr, err := syscall.UTF16PtrFromString(lockPath)
@@ -86,10 +82,7 @@ func (l *InstanceLock) Path() string {
 }
 
 func KillExistingInstance(configPath string) bool {
-	configDir := filepath.Dir(configPath)
-	configBase := filepath.Base(configPath)
-	lockName := fmt.Sprintf(".%s.lock", configBase)
-	lockPath := filepath.Join(configDir, lockName)
+	_, lockPath := instanceLockPath(configPath)
 
 	pid := readPIDFromLockFile(lockPath)
 	if pid <= 0 {
