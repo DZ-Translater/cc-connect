@@ -28,6 +28,10 @@ import (
 )
 
 const maxPlatformMessageLen = 4000
+
+// safeTurnCompletionFailure is sent only through the optional bridge terminal
+// event. Detailed agent errors stay in server logs and normal platform output.
+const safeTurnCompletionFailure = "The request could not be completed."
 const telegramBotCommandLimit = 100
 const defaultMaxQueuedMessages = 5 // default cap for queued messages per session
 
@@ -4774,6 +4778,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		select {
 		case <-stopCh:
 			sp.discard()
+			state.mu.Lock()
+			p := state.platform
+			state.mu.Unlock()
+			e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 			return
 		case event, ok = <-events:
 			if !ok {
@@ -4796,6 +4804,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				p := state.platform
 				state.mu.Unlock()
 				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
+				e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 				return
 			}
 			continue
@@ -4809,6 +4818,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			p := state.platform
 			state.mu.Unlock()
 			e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent session timed out (no response)"))
+			e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 			e.cleanupInteractiveState(sessionKey, state)
 			return
 		case <-turnDeadlineCh:
@@ -4822,6 +4832,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.mu.Unlock()
 			e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError),
 				fmt.Sprintf("agent turn exceeded maximum time (%v), stopping", e.maxTurnTime)))
+			e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 
 			// Two-phase shutdown: first try a graceful stop so the agent can
 			// write its final state before dying (preserves --resume ability).
@@ -4862,7 +4873,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		case <-e.ctx.Done():
 			state.mu.Lock()
 			state.eventsNeedResync = true
+			p := state.platform
 			state.mu.Unlock()
+			e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 			return
 		}
 
@@ -4870,7 +4883,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			sp.discard()
 			state.mu.Lock()
 			state.eventsNeedResync = true
+			p := state.platform
 			state.mu.Unlock()
+			e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 			return
 		}
 
@@ -5613,6 +5628,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					if !isSilent {
 						for _, chunk := range splitMessage(fullResponse, maxPlatformMessageLen) {
 							if err := sendWorkspaceWithError(p, replyCtx, chunk); err != nil {
+								e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 								return
 							}
 						}
@@ -5689,6 +5705,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 							slog.Debug("rich card: final update failed, falling back to send", "platform", p.Name(), "error", err)
 							if err := p.Send(e.ctx, replyCtx, finalCard); err != nil {
 								slog.Error("failed to send rich card reply", "error", err)
+								e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 								return
 							}
 						}
@@ -5696,6 +5713,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				} else {
 					if err := p.Send(e.ctx, replyCtx, finalCard); err != nil {
 						slog.Error("failed to send rich card reply", "error", err)
+						e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 						return
 					}
 				}
@@ -5704,6 +5722,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					overflowCard := richCardSupporter.BuildRichCard(CardStatusDone, "", nil, overflowBody, false, richStatusFooter)
 					if err := p.Send(e.ctx, replyCtx, overflowCard); err != nil {
 						slog.Error("failed to send overflow rich card", "error", err)
+						e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 						return
 					}
 				}
@@ -5716,6 +5735,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					unsent := strings.Join(textParts[segmentStart:], "")
 					if unsent != "" {
 						if !sendChunksWithStatusFooter(e.ctx, p, replyCtx, unsent, statusFooter, sendWorkspaceWithError) {
+							e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 							return
 						}
 					}
@@ -5725,6 +5745,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				metaOnly := strings.TrimSpace(strings.TrimPrefix(fullResponse, baseResponse))
 				if metaOnly != "" || statusFooter != "" {
 					if !sendChunksWithStatusFooter(e.ctx, p, replyCtx, metaOnly, statusFooter, sendWorkspaceWithError) {
+						e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 						return
 					}
 				}
@@ -5734,6 +5755,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			} else {
 				slog.Debug("EventResult: sending via p.Send (preview inactive or failed)", "response_len", len(fullResponse), "footer_len", len(statusFooter))
 				if !sendChunksWithStatusFooter(e.ctx, p, replyCtx, fullResponse, statusFooter, sendWorkspaceWithError) {
+					e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 					return
 				}
 			}
@@ -5741,6 +5763,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if elapsed := time.Since(replyStart); elapsed >= slowPlatformSend {
 				slog.Warn("slow final reply send", "platform", p.Name(), "elapsed", elapsed, "response_len", len(fullResponse))
 			}
+
+			completionContent := fullResponse
+			if isSilent {
+				completionContent = ""
+			}
+			e.notifyTurnCompletion(p, replyCtx, completionContent, true)
 
 			// TTS: async voice reply if enabled (skipped for silent replies)
 			if !isSilent && e.tts != nil && e.tts.Enabled && e.tts.TTS != nil {
@@ -5983,6 +6011,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if state.agentSession == nil || !state.agentSession.Alive() {
 				e.notifyDroppedQueuedMessages(state, event.Error)
 			}
+			e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 			return
 		}
 	}
@@ -5992,15 +6021,13 @@ channelClosed:
 	slog.Warn("agent process exited", "session_key", sessionKey)
 	state.mu.Lock()
 	state.eventsNeedResync = true
+	p := state.platform
 	state.mu.Unlock()
 	e.notifyDroppedQueuedMessages(state, fmt.Errorf("agent process exited"))
 	e.cleanupInteractiveState(sessionKey, state)
+	e.notifyTurnCompletion(p, replyCtx, safeTurnCompletionFailure, false)
 
 	if len(textParts) > 0 {
-		state.mu.Lock()
-		p := state.platform
-		state.mu.Unlock()
-
 		fullResponse := strings.Join(textParts, "")
 		session.AddHistory("assistant", fullResponse)
 		// Persist immediately — this path runs on abnormal channel close,
@@ -11668,6 +11695,19 @@ func (e *Engine) sendAlreadyRenderedWithError(p Platform, replyCtx any, content 
 		slog.Warn("slow platform send", "platform", p.Name(), "elapsed", elapsed, "content_len", len(content))
 	}
 	return nil
+}
+
+// notifyTurnCompletion is intentionally best-effort. It is an optional
+// protocol feature used by adapters that need a single, unfragmented terminal
+// result; ordinary messaging platforms continue to use their existing paths.
+func (e *Engine) notifyTurnCompletion(p Platform, replyCtx any, content string, ok bool) {
+	notifier, supported := p.(TurnCompletionNotifier)
+	if !supported {
+		return
+	}
+	if err := notifier.NotifyTurnCompletion(e.ctx, replyCtx, content, ok); err != nil {
+		slog.Warn("turn completion notification failed", "platform", p.Name(), "ok", ok, "error", err)
+	}
 }
 
 // send wraps p.Send with error logging, slow-operation warnings, and outgoing rate limiting.

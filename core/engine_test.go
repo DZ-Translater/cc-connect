@@ -86,6 +86,31 @@ func (p *stubPlatformEngine) clearSent() {
 	p.mu.Unlock()
 }
 
+type recordedTurnCompletion struct {
+	content string
+	ok      bool
+}
+
+type completionRecordingPlatform struct {
+	stubPlatformEngine
+	completions []recordedTurnCompletion
+}
+
+func (p *completionRecordingPlatform) NotifyTurnCompletion(_ context.Context, _ any, content string, ok bool) error {
+	p.mu.Lock()
+	p.completions = append(p.completions, recordedTurnCompletion{content: content, ok: ok})
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *completionRecordingPlatform) getCompletions() []recordedTurnCompletion {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]recordedTurnCompletion, len(p.completions))
+	copy(out, p.completions)
+	return out
+}
+
 type recallCheckingPlatform struct {
 	stubPlatformEngine
 	recalled bool
@@ -1084,6 +1109,60 @@ func TestProcessInteractiveEvents_DoesNotSuppressDifferentFinalText(t *testing.T
 	}
 	if got := p.getSent()[1]; got != finalText {
 		t.Fatalf("final sent text = %q, want %q", got, finalText)
+	}
+}
+
+func TestProcessInteractiveEvents_NotifiesFullTurnCompletionAfterSplitReplies(t *testing.T) {
+	p := &completionRecordingPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sessionKey := "test:completion"
+	session := e.sessions.GetOrCreateActive(sessionKey)
+	agentSession := newControllableSession("completion-session")
+	state := &interactiveState{
+		agentSession: agentSession,
+		platform:     p,
+		replyCtx:     "ctx-completion",
+	}
+	e.interactiveStates[sessionKey] = state
+
+	fullResponse := strings.Repeat("response ", maxPlatformMessageLen/4+10) + "done"
+	agentSession.events <- Event{Type: EventResult, Content: fullResponse, Done: true}
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "message-completion", time.Now(), nil, nil, state.replyCtx)
+
+	if got := p.getSent(); len(got) < 2 {
+		t.Fatalf("sent replies = %d, want split platform output", len(got))
+	}
+	completions := p.getCompletions()
+	if len(completions) != 1 {
+		t.Fatalf("completions = %#v, want one", completions)
+	}
+	if !completions[0].ok || completions[0].content != fullResponse {
+		t.Fatalf("completion = %#v, want complete response", completions[0])
+	}
+}
+
+func TestProcessInteractiveEvents_NotifiesSafeFailureCompletion(t *testing.T) {
+	p := &completionRecordingPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sessionKey := "test:completion-error"
+	session := e.sessions.GetOrCreateActive(sessionKey)
+	agentSession := newControllableSession("completion-error-session")
+	state := &interactiveState{
+		agentSession: agentSession,
+		platform:     p,
+		replyCtx:     "ctx-completion-error",
+	}
+	e.interactiveStates[sessionKey] = state
+
+	agentSession.events <- Event{Type: EventError, Error: errors.New("internal path /srv/secret failed")}
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "message-completion-error", time.Now(), nil, nil, state.replyCtx)
+
+	completions := p.getCompletions()
+	if len(completions) != 1 {
+		t.Fatalf("completions = %#v, want one", completions)
+	}
+	if completions[0].ok || completions[0].content != safeTurnCompletionFailure {
+		t.Fatalf("completion = %#v, want safe failure", completions[0])
 	}
 }
 
@@ -4726,7 +4805,7 @@ func TestCmdModel_MultiWorkspacePersistsWorkspaceModelForRecreatedAgent(t *testi
 			mode:  "default",
 		},
 	}
-	e := NewEngine("test", globalAgent, []Platform{p}, "", LangEnglish)
+	e := NewEngine("test", globalAgent, []Platform{p}, filepath.Join(t.TempDir(), "sessions.json"), LangEnglish)
 	e.SetProjectStateStore(NewProjectStateStore(filepath.Join(t.TempDir(), "projects", "test.state.json")))
 	e.SetMultiWorkspace(t.TempDir(), filepath.Join(t.TempDir(), "bindings.json"))
 

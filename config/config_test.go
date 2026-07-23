@@ -3452,6 +3452,13 @@ func TestBridgeDeploymentConfig_UsesSeparateThirdPartyProviders(t *testing.T) {
 	if len(cfg.Projects) != 2 {
 		t.Fatalf("projects = %d, want 2", len(cfg.Projects))
 	}
+	mode, thinkingMessages, toolMessages, _, _, _, _, _ := EffectiveDisplay(cfg, &cfg.Projects[0])
+	if mode != DisplayModeQuiet || thinkingMessages || toolMessages {
+		t.Fatalf("Bridge display = (%q, thinking=%t, tool=%t), want quiet with intermediate messages disabled", mode, thinkingMessages, toolMessages)
+	}
+	if cfg.InstantReply.Enabled == nil || *cfg.InstantReply.Enabled {
+		t.Fatal("Bridge instant reply must be explicitly disabled for request-response adapters")
+	}
 
 	claude := cfg.Projects[0]
 	if claude.Name != "dianzhan-claude" || claude.Agent.Type != "claudecode" {

@@ -9,6 +9,16 @@ port = 9810
 token = "${CC_BRIDGE_TOKEN}"
 path = "/bridge/ws"
 
+# The admin gateway uses one HTTP request per turn and receives only the final
+# response. Do not emit tool/thinking progress as separate Bridge replies.
+[display]
+mode = "quiet"
+
+# The browser already renders its own pending state. Keeping this explicit
+# prevents the first transient acknowledgement from being treated as a result.
+[instant_reply]
+enabled = false
+
 [[providers]]
 name = "dianzhan-claude"
 api_key = "${ANTHROPIC_API_KEY}"

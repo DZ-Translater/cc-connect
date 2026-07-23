@@ -385,6 +385,71 @@ func TestBridge_ReplyRouting(t *testing.T) {
 	if reply["reply_ctx"] != "ctx-1" {
 		t.Fatalf("reply_ctx = %q, want ctx-1", reply["reply_ctx"])
 	}
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	var extra map[string]any
+	if err := conn.ReadJSON(&extra); err == nil {
+		t.Fatalf("legacy adapter unexpectedly received terminal event: %#v", extra)
+	}
+}
+
+func TestBridge_ReplyTurnCompletionIsOptIn(t *testing.T) {
+	bs, wsURL := startTestBridge(t, "")
+	bp := bs.NewPlatform("test-proj")
+	e := NewEngine("test-proj", &stubAgent{}, []Platform{bp}, "", LangEnglish)
+	bs.RegisterEngine("test-proj", e, bp)
+	bp.handler = func(p Platform, msg *Message) {
+		if err := p.Reply(context.TODO(), msg.ReplyCtx, "complete response"); err != nil {
+			t.Fatalf("Reply: %v", err)
+		}
+	}
+
+	conn := dialWS(t, wsURL, nil)
+	register(t, conn, "rc-completion", []string{"text", "turn_completion"})
+	mustWriteJSON(t, conn, map[string]any{
+		"type":        "message",
+		"msg_id":      "m1",
+		"session_key": "rc-completion:u1:u1",
+		"user_id":     "u1",
+		"content":     "ping",
+		"reply_ctx":   "ctx-1",
+	})
+
+	reply := readMsg(t, conn)
+	if reply["type"] != "reply" || reply["content"] != "complete response" {
+		t.Fatalf("reply = %#v", reply)
+	}
+	done := readMsg(t, conn)
+	if done["type"] != "reply_done" || done["ok"] != true {
+		t.Fatalf("completion = %#v", done)
+	}
+	if done["reply_ctx"] != "ctx-1" || done["content"] != "complete response" {
+		t.Fatalf("completion = %#v", done)
+	}
+}
+
+func TestBridge_TurnCompletionFailureIsOptInAndSafe(t *testing.T) {
+	bs, wsURL := startTestBridge(t, "")
+	bp := bs.NewPlatform("test-proj")
+	conn := dialWS(t, wsURL, nil)
+	register(t, conn, "rc-failure", []string{"text", "turn_completion"})
+
+	rc := newBridgeReplyCtx(bs.getAdapter("rc-failure"), "rc-failure:u1:u1", "ctx-1")
+	if err := bp.NotifyTurnCompletion(context.Background(), rc, "The request could not be completed.", false); err != nil {
+		t.Fatalf("NotifyTurnCompletion: %v", err)
+	}
+
+	done := readMsg(t, conn)
+	if done["type"] != "reply_done" || done["ok"] != false {
+		t.Fatalf("completion = %#v", done)
+	}
+	if done["error"] != "The request could not be completed." {
+		t.Fatalf("error = %q", done["error"])
+	}
+	if _, exists := done["content"]; exists {
+		t.Fatalf("failed completion must not include content: %#v", done)
+	}
 }
 
 func TestBridge_ReconstructReplyCtx_RequiresCapability(t *testing.T) {
@@ -490,7 +555,7 @@ func TestBridge_CardFallback(t *testing.T) {
 
 	// Adapter declares NO card capability → should get text fallback
 	conn := dialWS(t, wsURL, nil)
-	register(t, conn, "nocards", []string{"text"})
+	register(t, conn, "nocards", []string{"text", "turn_completion"})
 
 	mustWriteJSON(t, conn, map[string]any{
 		"type":        "message",
@@ -508,6 +573,34 @@ func TestBridge_CardFallback(t *testing.T) {
 	content, _ := reply["content"].(string)
 	if !strings.Contains(content, "hello") {
 		t.Fatalf("fallback should contain 'hello', got %q", content)
+	}
+	done := readMsg(t, conn)
+	if done["type"] != "reply_done" || done["ok"] != true {
+		t.Fatalf("card fallback completion = %#v", done)
+	}
+	if done["content"] != content {
+		t.Fatalf("completion content = %q, want %q", done["content"], content)
+	}
+}
+
+func TestBridge_ButtonFallbackCompletesTurn(t *testing.T) {
+	bs, wsURL := startTestBridge(t, "")
+	bp := bs.NewPlatform("test-proj")
+	conn := dialWS(t, wsURL, nil)
+	register(t, conn, "no-buttons", []string{"text", "turn_completion"})
+
+	rc := newBridgeReplyCtx(bs.getAdapter("no-buttons"), "no-buttons:u1:u1", "ctx-1")
+	if err := bp.SendWithButtons(context.Background(), rc, "Choose an option", [][]ButtonOption{{{Text: "Continue", Data: "cmd:/continue"}}}); err != nil {
+		t.Fatalf("SendWithButtons: %v", err)
+	}
+
+	reply := readMsg(t, conn)
+	if reply["type"] != "reply" || reply["content"] != "Choose an option" {
+		t.Fatalf("button fallback reply = %#v", reply)
+	}
+	done := readMsg(t, conn)
+	if done["type"] != "reply_done" || done["ok"] != true || done["content"] != "Choose an option" {
+		t.Fatalf("button fallback completion = %#v", done)
 	}
 }
 

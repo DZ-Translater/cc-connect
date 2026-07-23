@@ -316,6 +316,7 @@ var (
 	_ FileSender                = (*BridgePlatform)(nil)
 	_ CardNavigable             = (*BridgePlatform)(nil)
 	_ ReplyContextReconstructor = (*BridgePlatform)(nil)
+	_ TurnCompletionNotifier    = (*BridgePlatform)(nil)
 )
 
 func (bp *BridgePlatform) Name() string { return "bridge" }
@@ -328,6 +329,20 @@ func (bp *BridgePlatform) Start(handler MessageHandler) error {
 func (bp *BridgePlatform) Stop() error { return nil }
 
 func (bp *BridgePlatform) Reply(ctx context.Context, replyCtx any, content string) error {
+	if err := bp.sendReply(replyCtx, content); err != nil {
+		return err
+	}
+	return bp.NotifyTurnCompletion(ctx, replyCtx, content, true)
+}
+
+// Send delivers a regular reply without declaring the agent turn complete.
+// Engine uses Send for intermediate output and sends the terminal completion
+// explicitly after it has assembled the whole response.
+func (bp *BridgePlatform) Send(ctx context.Context, replyCtx any, content string) error {
+	return bp.sendReply(replyCtx, content)
+}
+
+func (bp *BridgePlatform) sendReply(replyCtx any, content string) error {
 	rc, ok := replyCtx.(*bridgeReplyCtx)
 	if !ok {
 		return fmt.Errorf("bridge: invalid reply context type %T", replyCtx)
@@ -341,8 +356,32 @@ func (bp *BridgePlatform) Reply(ctx context.Context, replyCtx any, content strin
 	})
 }
 
-func (bp *BridgePlatform) Send(ctx context.Context, replyCtx any, content string) error {
-	return bp.Reply(ctx, replyCtx, content)
+// NotifyTurnCompletion sends an opt-in terminal event for a turn. The full
+// content is intentionally not subject to platform reply splitting, so a BFF
+// can persist or return the complete agent response after receiving one event.
+func (bp *BridgePlatform) NotifyTurnCompletion(ctx context.Context, replyCtx any, content string, ok bool) error {
+	rc, valid := replyCtx.(*bridgeReplyCtx)
+	if !valid {
+		return fmt.Errorf("bridge: invalid reply context type %T", replyCtx)
+	}
+	a := bp.server.getAdapter(rc.Platform)
+	if a == nil || !a.capabilities["turn_completion"] {
+		return nil
+	}
+
+	message := map[string]any{
+		"type":        "reply_done",
+		"session_key": rc.SessionKey,
+		"reply_ctx":   rc.ReplyCtx,
+		"ok":          ok,
+	}
+	if ok {
+		message["content"] = content
+		message["format"] = "text"
+	} else {
+		message["error"] = content
+	}
+	return bp.server.sendToAdapter(rc.Platform, message)
 }
 
 func (bp *BridgePlatform) ReconstructReplyCtx(sessionKey string) (any, error) {

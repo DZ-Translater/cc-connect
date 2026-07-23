@@ -105,7 +105,7 @@ Must be the first message after connection. Declares the adapter identity and ca
 {
   "type": "register",
   "platform": "wechat",
-  "capabilities": ["text", "image", "file", "audio", "card", "buttons", "typing", "update_message", "preview"],
+  "capabilities": ["text", "image", "file", "audio", "card", "buttons", "typing", "update_message", "preview", "turn_completion"],
   "metadata": {
     "version": "1.0.0",
     "description": "WeChat Official Account adapter"
@@ -240,6 +240,55 @@ A complete reply message to send to the user.
 | `reply_ctx` | string | yes | Echoed from the original message. |
 | `content` | string | yes | Reply text content. |
 | `format` | string | no | `"text"` (default) or `"markdown"`. |
+
+#### `reply_done`
+
+An unambiguous terminal event for one agent turn. It is sent only to adapters
+that declared the optional `"turn_completion"` capability. Normal `reply`
+messages are still delivered as usual and may be intermediate or split to fit a
+platform message limit; request/response adapters should wait for `reply_done`
+instead of treating the first `reply` as the full result.
+
+For text-only adapters, card and button interactions degrade to a plain
+`reply`. That direct reply is followed by `reply_done`, which deliberately ends
+the current request so the adapter can accept the user's next plain-text answer
+as a new message. Adapters that need in-place interaction should declare and
+implement `card` / `buttons` and `card_action` instead.
+
+Successful completion:
+
+```json
+{
+  "type": "reply_done",
+  "session_key": "wechat:user123:user123",
+  "reply_ctx": "conv-abc-123",
+  "content": "The complete final response, without platform splitting.",
+  "format": "text",
+  "ok": true
+}
+```
+
+Failed completion:
+
+```json
+{
+  "type": "reply_done",
+  "session_key": "wechat:user123:user123",
+  "reply_ctx": "conv-abc-123",
+  "error": "The request could not be completed.",
+  "ok": false
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | yes | `"reply_done"` |
+| `session_key` | string | yes | Target session. |
+| `reply_ctx` | string | yes | Echoed from the incoming message; use it to correlate the request. |
+| `ok` | boolean | yes | Whether the turn completed successfully. |
+| `content` | string | when `ok` is true | Complete final response, not subject to normal platform reply splitting. |
+| `format` | string | when `ok` is true | Currently `"text"`. |
+| `error` | string | when `ok` is false | Safe user-facing failure text. Never rely on it for internal diagnostics. |
 
 #### `reply_stream`
 
@@ -477,12 +526,14 @@ Notify the adapter of a server-side error.
 | `preview` | Streaming preview (requires `update_message`) | `preview_start`, `reply_stream` |
 | `delete_message` | Delete messages | `delete_message` |
 | `reconstruct_reply` | Can reconstruct reply context from session_key | Enables cron/heartbeat messages |
+| `turn_completion` | Receives one complete terminal result for a turn | `reply_done` |
 
 If a capability is not declared, cc-connect will automatically degrade:
 - No `card` → cards are rendered as plain text via `RenderText()`.
 - No `buttons` → buttons are omitted or rendered as text hints.
 - No `preview` → streaming is disabled; only the final reply is sent.
 - No `typing` → typing indicators are skipped.
+- No `turn_completion` → no `reply_done` event is sent; existing `reply` behavior is unchanged.
 
 ### Image Object
 

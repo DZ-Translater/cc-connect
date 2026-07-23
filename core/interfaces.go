@@ -15,6 +15,17 @@ type Platform interface {
 	Stop() error
 }
 
+// TurnCompletionNotifier is an optional platform capability for callers that
+// need one unambiguous terminal event for an agent turn. Platforms that do not
+// implement it retain the normal reply/send behavior.
+//
+// content is the complete final response when ok is true. When ok is false it
+// must be a safe, user-facing failure message and must not expose internal
+// agent, filesystem, or credential details.
+type TurnCompletionNotifier interface {
+	NotifyTurnCompletion(ctx context.Context, replyCtx any, content string, ok bool) error
+}
+
 // ErrNotSupported indicates a platform doesn't support a particular operation.
 var ErrNotSupported = errors.New("operation not supported by this platform")
 

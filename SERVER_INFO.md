@@ -40,8 +40,24 @@ docker compose up -d
 The Bridge port defaults to loopback. Set `BRIDGE_BIND_ADDR` in
 `.env` only when a firewall and TLS reverse proxy protect the public endpoint.
 
+## Admin Gateway Network
+
+The tracked Bridge Compose file also joins the external, internal-only
+`cc-connect-bridge-api` network. Create it once before the first deployment:
+
+```bash
+docker network create --internal cc-connect-bridge-api
+```
+
+Only a server-side gateway such as `web-plugin` may join this network. Keep
+the Bridge port bound to loopback, and provision its token to that gateway in a
+separate mode-`0600` runtime file. Never expose `CC_BRIDGE_TOKEN` to a browser
+or add it to an application image.
+
 ## Image Publishing And Updates
 
 `.github/workflows/docker-bridge.yml` publishes
-`yzg963/cc-connect-bridge:latest` to Docker Hub on pushes to `dianzhan`. The
-first workflow run requires this change to be committed and pushed.
+`ghcr.io/dz-translater/cc-connect-bridge` to GHCR on pushes to `dianzhan`.
+Deploy only the immutable `image@sha256` reference emitted by the successful
+workflow, never `latest` or another mutable tag. The server must pull that
+reference with a dedicated read-only GHCR credential and never build locally.

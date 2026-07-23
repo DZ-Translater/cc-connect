@@ -105,7 +105,7 @@ token = "your-secret"     # 认证密钥，必填
 {
   "type": "register",
   "platform": "wechat",
-  "capabilities": ["text", "image", "file", "audio", "card", "buttons", "typing", "update_message", "preview"],
+  "capabilities": ["text", "image", "file", "audio", "card", "buttons", "typing", "update_message", "preview", "turn_completion"],
   "metadata": {
     "version": "1.0.0",
     "description": "微信公众号适配器"
@@ -240,6 +240,51 @@ token = "your-secret"     # 认证密钥，必填
 | `reply_ctx` | string | 是 | 来自原始消息的回传。 |
 | `content` | string | 是 | 回复文本内容。 |
 | `format` | string | 否 | `"text"`（默认）或 `"markdown"`。 |
+
+#### `reply_done`
+
+单个 Agent 回合的明确终态事件。只有声明可选 `"turn_completion"` 能力的适配器才会收到它。
+普通 `reply` 仍会按原有方式发送，可能是中间消息，也可能因为平台长度限制被拆分；请求/响应型
+适配器应等待 `reply_done`，不能把第一条 `reply` 当作完整结果。
+
+对于纯文本适配器，卡片和按钮交互会降级为普通 `reply`。该直接回复随后会发送
+`reply_done`，刻意结束当前请求，使适配器能把用户下一条纯文本回答作为新的消息提交。
+需要原地交互的适配器应声明并实现 `card` / `buttons` 与 `card_action`。
+
+成功终态：
+
+```json
+{
+  "type": "reply_done",
+  "session_key": "wechat:user123:user123",
+  "reply_ctx": "conv-abc-123",
+  "content": "未经过平台分片的完整最终回复。",
+  "format": "text",
+  "ok": true
+}
+```
+
+失败终态：
+
+```json
+{
+  "type": "reply_done",
+  "session_key": "wechat:user123:user123",
+  "reply_ctx": "conv-abc-123",
+  "error": "任务未能完成。",
+  "ok": false
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `type` | string | 是 | `"reply_done"` |
+| `session_key` | string | 是 | 目标会话。 |
+| `reply_ctx` | string | 是 | 来自入站消息的回传值，用于关联请求。 |
+| `ok` | boolean | 是 | 回合是否成功结束。 |
+| `content` | string | `ok` 为 true 时 | 不受普通平台消息分片影响的完整最终回复。 |
+| `format` | string | `ok` 为 true 时 | 当前为 `"text"`。 |
+| `error` | string | `ok` 为 false 时 | 安全的面向用户失败说明，不能用于内部诊断。 |
 
 #### `reply_stream`
 
@@ -477,12 +522,14 @@ token = "your-secret"     # 认证密钥，必填
 | `preview` | 流式预览（需要 `update_message`） | `preview_start`、`reply_stream` |
 | `delete_message` | 删除消息 | `delete_message` |
 | `reconstruct_reply` | 可从 session_key 重建回复上下文 | 启用定时任务/心跳消息 |
+| `turn_completion` | 接收单个回合的完整终态结果 | `reply_done` |
 
 如果未声明某个能力，cc-connect 会自动降级：
 - 没有 `card` → 卡片通过 `RenderText()` 渲染为纯文本。
 - 没有 `buttons` → 按钮被省略或渲染为文本提示。
 - 没有 `preview` → 禁用流式预览；只发送最终回复。
 - 没有 `typing` → 跳过输入指示器。
+- 没有 `turn_completion` → 不发送 `reply_done`；原有 `reply` 行为不变。
 
 ### 图片对象
 

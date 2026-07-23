@@ -1,6 +1,6 @@
 services:
   cc-connect-bridge:
-    image: ${CC_CONNECT_IMAGE:-yzg963/cc-connect-bridge:latest}
+    image: "${CC_CONNECT_IMAGE:?Set CC_CONNECT_IMAGE to a GHCR image@sha256 reference}"
     container_name: cc-connect-bridge
     restart: unless-stopped
     environment:
@@ -28,6 +28,16 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 512
+    networks:
+      default:
+      cc-connect-bridge-api:
+        aliases:
+          - cc-connect-bridge
 
 volumes:
   cc-connect-data:
+
+networks:
+  cc-connect-bridge-api:
+    external: true
+    name: cc-connect-bridge-api

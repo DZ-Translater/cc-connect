@@ -56,7 +56,8 @@ HTTP `401`。
 
 连接建立后，第一帧必须是 `register`。`platform` 是外部程序的唯一名称，同一个
 `platform` 的新连接会替换旧连接，因此多个实例应使用不同名称。能力按实际支持情况
-声明；只做文本任务时声明 `text` 即可。
+声明；只做文本任务时声明 `text` 即可。需要把一条请求同步等待到完整 Agent
+回复的 BFF 还应声明 `turn_completion`，并等待下面的 `reply_done` 终态事件。
 
 ```json
 {
@@ -119,6 +120,28 @@ HTTP `401`。
 
 声明 `preview`（并实际处理 `preview_start`、`preview_ack`、`reply_stream`）后，可以
 接收增量输出。否则服务端会发送最终的 `reply`，不会要求客户端实现流式更新。
+
+对于网页 BFF、任务 API 等必须可靠拿到整条最终回复的调用方，在注册时声明
+`turn_completion`，并忽略同一 `reply_ctx` 的中间或分片 `reply`，直到收到：
+
+```json
+{
+  "type": "reply_done",
+  "session_key": "task-api:dianzhan:job-001",
+  "reply_ctx": "job-001",
+  "content": "完整最终输出",
+  "format": "text",
+  "ok": true
+}
+```
+
+失败时 `reply_done` 会携带 `"ok": false` 和安全的 `error` 文本，不会暴露 Agent、文件
+系统或凭证细节。未声明该能力的既有适配器不会收到 `reply_done`，继续只处理 `reply`
+即可。完整 Schema 见协议文档。
+
+当适配器只声明文本能力时，权限或提问卡片会降级成直接文本 `reply`，随后也会发送
+`reply_done`，以结束当前 HTTP 任务；用户下一条普通文本消息会作为该交互的回答进入
+同一 `session_key`。需要卡片内点击交互的适配器必须实现 `buttons` 和 `card_action`。
 
 其他常见服务端事件：
 

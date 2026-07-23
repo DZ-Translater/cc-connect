@@ -29,7 +29,9 @@ mkdir -p workspaces/dianzhan skills
 `ANTHROPIC_MODEL` 或 `CODEX_MODEL`；Codex 上游若仅支持 Chat Completions，则将
 `CODEX_WIRE_API` 从默认的 `responses` 改为 `chat`。
 
-镜像由 GitHub Actions 构建并发布到 Docker Hub，服务器不执行 Docker build。首次启动和后续更新均使用：
+镜像由 GitHub Actions 构建并发布到 GHCR，服务器不执行 Docker build。将成功工作流输出的
+`ghcr.io/dz-translater/cc-connect-bridge@sha256:...` 写入 `.env` 的
+`CC_CONNECT_IMAGE`，不要部署 `latest` 等可变标签。服务器需使用只读 GHCR 凭据登录后，首次启动和后续更新均使用：
 
 ```bash
 docker compose pull
@@ -43,6 +45,16 @@ sudo chown -R 10001:10001 workspaces/dianzhan
 ```
 
 Bridge 默认只绑定 `127.0.0.1:9810`。需要由其他机器连接时，应在反向代理后暴露 WebSocket，并通过防火墙限制来源；不要直接将端口公开到互联网。
+
+## 管理后台网关
+
+如需由同一主机上的管理后台调用 Bridge，先创建一次仅容器间可见的网络：
+
+```bash
+docker network create --internal cc-connect-bridge-api
+```
+
+本 Compose 会将 `cc-connect-bridge` 接入该外部网络，但不会改变 `9810` 的回环端口绑定。调用方应是受认证的服务端网关，而不是浏览器；它需要单独持有 `CC_BRIDGE_TOKEN`，并且不得将该 Token 放进前端环境变量、URL 或访问日志。
 
 ## 外部调用
 
