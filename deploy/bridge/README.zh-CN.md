@@ -103,7 +103,10 @@ skills/
     └── SKILL.md
 ```
 
-该目录在容器内以只读方式挂载到 `/skills`，启动脚本同时链接到 Claude 与 Codex 的原生 Skills 路径。变更 Skill 后重启容器：
+该目录在容器内以只读方式挂载到 `/skills`。启动脚本会为 Claude、Codex
+及兼容的 `.agents` 路径分别创建 `/data` 中可写的原生 Skills 根，并把每个
+共享 Skill 链接进去；CLI 自己管理的系统 Skill（例如 Codex 的 `.system`）不会
+写入共享目录。新增或删除一级 Skill 后重启容器：
 
 ```bash
 docker compose restart
