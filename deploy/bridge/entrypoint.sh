@@ -9,7 +9,20 @@ set -eu
 
 mkdir -p "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$HOME/.agents"
 
-prepare_skills() {
+managed_skill_marker=".cc-connect-source"
+
+is_source_skill() {
+    [ -d "$1" ] && [ ! -L "$1" ] && [ -f "$1/SKILL.md" ]
+}
+
+is_managed_skill_copy() {
+    [ -d "$1" ] &&
+        [ ! -L "$1" ] &&
+        [ -f "$1/$managed_skill_marker" ] &&
+        [ "$(cat "$1/$managed_skill_marker")" = "$2" ]
+}
+
+sync_skills() {
     target="$1"
     if [ -L "$target" ]; then
         if [ "$(readlink "$target")" != "/skills" ]; then
@@ -26,45 +39,63 @@ prepare_skills() {
 
     mkdir -p "$target"
 
-    # Remove only dangling links managed by this entrypoint. This makes a
-    # deleted shared skill disappear after a container restart without
-    # touching CLI-managed files such as Codex's .system directory.
+    # Remove stale entries managed by this entrypoint. Native CLI content such
+    # as Codex's .system directory has no marker and is left untouched.
     for destination in "$target"/* "$target"/.[!.]* "$target"/..?*; do
-        [ -L "$destination" ] || continue
-        case "$(readlink "$destination")" in
-            /skills/*)
-                [ -e "$destination" ] || rm "$destination"
-                ;;
-        esac
+        [ -e "$destination" ] || [ -L "$destination" ] || continue
+        skill_name=${destination##*/}
+        source="/skills/$skill_name"
+
+        if [ -L "$destination" ]; then
+            case "$(readlink "$destination")" in
+                /skills/*)
+                    is_source_skill "$source" || rm "$destination"
+                    ;;
+            esac
+            continue
+        fi
+
+        if is_managed_skill_copy "$destination" "$source" && ! is_source_skill "$source"; then
+            rm -rf "$destination"
+        fi
     done
 
-    # /skills is a read-only template mount. Link each shared skill into a
-    # writable native root, leaving .system for each CLI to manage itself.
+    # Some CLIs intentionally ignore skill directories that resolve outside
+    # their native root. Copy each shared skill from the read-only template
+    # mount so Codex and Claude Code see ordinary directories after restart.
     for source in /skills/* /skills/.[!.]* /skills/..?*; do
-        [ -e "$source" ] || [ -L "$source" ] || continue
+        is_source_skill "$source" || continue
         skill_name=${source##*/}
         [ "$skill_name" = ".system" ] && continue
 
         destination="$target/$skill_name"
         if [ -L "$destination" ]; then
-            if [ "$(readlink "$destination")" = "$source" ]; then
-                continue
+            if [ "$(readlink "$destination")" != "$source" ]; then
+                echo "refusing to replace unexpected shared skill link: $destination" >&2
+                exit 1
             fi
-            echo "refusing to replace unexpected shared skill link: $destination" >&2
-            exit 1
-        fi
-        if [ -e "$destination" ]; then
+        elif [ -e "$destination" ] && ! is_managed_skill_copy "$destination" "$source"; then
             echo "refusing to replace existing skill path: $destination" >&2
             exit 1
         fi
-        ln -s "$source" "$destination"
+
+        temporary="$(mktemp -d "$target/.cc-connect-skill.XXXXXX")"
+        cp -R "$source/." "$temporary/"
+        printf '%s\n' "$source" > "$temporary/$managed_skill_marker"
+
+        if [ -L "$destination" ]; then
+            rm "$destination"
+        elif [ -e "$destination" ]; then
+            rm -rf "$destination"
+        fi
+        mv "$temporary" "$destination"
     done
 }
 
-# Each CLI gets a writable native skill root under /data. Shared skills remain
-# read-only because only their top-level entries link to the /skills mount.
-prepare_skills "$CLAUDE_CONFIG_DIR/skills"
-prepare_skills "$CODEX_HOME/skills"
-prepare_skills "$HOME/.agents/skills"
+# Each CLI gets real, writable directories under /data. /skills remains the
+# read-only source of truth and is synchronized on every container start.
+sync_skills "$CLAUDE_CONFIG_DIR/skills"
+sync_skills "$CODEX_HOME/skills"
+sync_skills "$HOME/.agents/skills"
 
 exec "$@"

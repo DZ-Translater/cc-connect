@@ -317,9 +317,11 @@ curl -i http://127.0.0.1:9810/bridge/ws
   new namespace`：确认部署使用仓库中的 Compose 文件，并且容器的
   `SecurityOpt` 同时包含 `seccomp=unconfined`、`apparmor=unconfined` 和
   `no-new-privileges`；不要改用会绕过 Codex workspace 沙箱的 `yolo` 模式。
+- 新增或更新 Skill 后未生效：确认目录已复制到服务器的
+  `/srv/cc-connect/skills/<skill-name>/SKILL.md`，然后重启 Bridge。入口脚本会在
+  启动时把 `/skills` 同步复制到 Codex、Claude Code 和共享 Agent 的原生 Skill
+  目录；不要只修改容器内 `/data` 下的生成副本。
 - 连接被关闭：确认客户端每 30 秒发送应用层 `ping`，并实现断线重连。
-- 服务器重启后 Skills 变更未生效：在 `/srv/cc-connect/skills` 修改后执行
-  `docker compose restart`。
 
 不要在日志、工单或代码中记录 `CC_BRIDGE_TOKEN`、`ANTHROPIC_API_KEY` 或
 `OPENAI_API_KEY`。

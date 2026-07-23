@@ -59,6 +59,23 @@ docker inspect cc-connect-bridge \
   --format 'user={{.Config.User}} caps={{json .HostConfig.CapAdd}} security={{json .HostConfig.SecurityOpt}} readonly={{.HostConfig.ReadonlyRootfs}}'
 ```
 
+## Updating Shared Skills
+
+`/srv/cc-connect/skills` is the host-side source of truth and is mounted into
+the container as read-only `/skills`. Put each Skill in its own directory with
+a top-level `SKILL.md`, then restart the Bridge:
+
+```bash
+rsync -a --delete ./my-skill/ by:/srv/cc-connect/skills/my-skill/
+ssh by 'cd /srv/cc-connect && docker compose restart cc-connect-bridge'
+```
+
+On every container start, the entrypoint copies valid Skills into the native
+Codex, Claude Code, and shared agent roots under `/data`. Changed Skills are
+replaced and deleted source Skills are removed; CLI-managed content such as
+Codex's `.system` directory is preserved. Do not edit the generated copies
+inside the container because the next restart overwrites them.
+
 ## Admin Gateway Network
 
 The tracked Bridge Compose file also joins the external, internal-only
