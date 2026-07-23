@@ -278,6 +278,7 @@ func TestBridge_MessageRouting(t *testing.T) {
 		"user_id":     "user1",
 		"user_name":   "Alice",
 		"content":     "hello bridge",
+		"model":       "provider/gpt-5.3-codex",
 		"reply_ctx":   "conv-1",
 		"images":      []map[string]any{{"mime_type": "image/png", "data": imgData, "file_name": "test.png"}},
 	})
@@ -297,6 +298,9 @@ func TestBridge_MessageRouting(t *testing.T) {
 	}
 	if received.UserName != "Alice" {
 		t.Fatalf("user_name = %q, want %q", received.UserName, "Alice")
+	}
+	if received.ModelOverride != "provider/gpt-5.3-codex" {
+		t.Fatalf("model override = %q, want %q", received.ModelOverride, "provider/gpt-5.3-codex")
 	}
 	if len(received.Images) != 1 {
 		t.Fatalf("images count = %d, want 1", len(received.Images))
@@ -758,12 +762,146 @@ func startTestBridgeWithREST(t *testing.T, token string) (*BridgeServer, string)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/bridge/ws", bs.handleWS)
+	mux.HandleFunc("/bridge/models", bs.authHTTP(bs.handleModels))
 	mux.HandleFunc("/bridge/sessions", bs.authHTTP(bs.handleSessions))
 	mux.HandleFunc("/bridge/sessions/", bs.authHTTP(bs.handleSessionRoutes))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
 	return bs, srv.URL
+}
+
+func TestBridge_ModelsRequiresAuthAndUsesStableWireContract(t *testing.T) {
+	bs, baseURL := startTestBridgeWithREST(t, "model-token")
+	agent := &stubModelModeAgent{model: "gpt-4.1-mini"}
+	bs.enginesMu.Lock()
+	bs.engines["test-proj"].engine.agent = agent
+	bs.enginesMu.Unlock()
+
+	if result := bridgeGet(t, baseURL+"/bridge/models?project=test-proj", ""); result.OK {
+		t.Fatal("expected model endpoint to reject an unauthenticated request")
+	}
+	result := bridgeGet(t, baseURL+"/bridge/models?project=test-proj", "model-token")
+	if !result.OK {
+		t.Fatalf("models request failed: %s", result.Error)
+	}
+	var payload struct {
+		Models []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Alias       string `json:"alias"`
+		} `json:"models"`
+		Selected string `json:"selected"`
+	}
+	mustUnmarshalJSON(t, result.Data, &payload)
+	if len(payload.Models) != 2 {
+		t.Fatalf("models count = %d, want 2", len(payload.Models))
+	}
+	if payload.Models[0].Name != "gpt-4.1" || payload.Models[0].Alias != "gpt" || payload.Models[0].Description != "Balanced" {
+		t.Fatalf("first model = %#v", payload.Models[0])
+	}
+	if payload.Selected != "gpt-4.1-mini" {
+		t.Fatalf("selected = %q, want gpt-4.1-mini", payload.Selected)
+	}
+}
+
+func TestBridge_ModelsReturnsConversationSelection(t *testing.T) {
+	bs, baseURL := startTestBridgeWithREST(t, "model-token")
+	agent := &stubModelModeAgent{model: "project-default"}
+	bs.enginesMu.Lock()
+	engine := bs.engines["test-proj"].engine
+	engine.agent = agent
+	bs.enginesMu.Unlock()
+	sessionKey := "bridge:user:test-proj:conversation"
+	session := engine.sessions.GetOrCreateActive(sessionKey)
+	session.SetActiveModel("provider/gpt-5.3-codex")
+
+	result := bridgeGet(t, baseURL+"/bridge/models?project=test-proj&session_key="+sessionKey, "model-token")
+	if !result.OK {
+		t.Fatalf("models request failed: %s", result.Error)
+	}
+	var payload struct {
+		Selected string `json:"selected"`
+	}
+	mustUnmarshalJSON(t, result.Data, &payload)
+	if payload.Selected != "provider/gpt-5.3-codex" {
+		t.Fatalf("selected = %q, want conversation model", payload.Selected)
+	}
+}
+
+func TestDecodeBridgeAttachmentsEnforcesLimits(t *testing.T) {
+	encode := func(value string) string {
+		return base64.StdEncoding.EncodeToString([]byte(value))
+	}
+	tests := []struct {
+		name string
+		msg  bridgeMessage
+	}{
+		{
+			name: "count",
+			msg: bridgeMessage{Files: []bridgeFileData{
+				{FileName: "1", Data: encode("1")},
+				{FileName: "2", Data: encode("2")},
+				{FileName: "3", Data: encode("3")},
+			}},
+		},
+		{
+			name: "single size",
+			msg:  bridgeMessage{Files: []bridgeFileData{{FileName: "big", Data: encode("12345")}}},
+		},
+		{
+			name: "total size",
+			msg: bridgeMessage{Files: []bridgeFileData{
+				{FileName: "1", Data: encode("1234")},
+				{FileName: "2", Data: encode("5678")},
+			}},
+		},
+		{
+			name: "invalid base64",
+			msg:  bridgeMessage{Files: []bridgeFileData{{FileName: "bad", Data: "%%%"}}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, err := decodeBridgeAttachmentsWithLimits(test.msg, 2, 4, 7)
+			if err == nil {
+				t.Fatal("expected attachment validation error")
+			}
+		})
+	}
+
+	images, files, _, err := decodeBridgeAttachmentsWithLimits(bridgeMessage{
+		Images: []bridgeImageData{{MimeType: "image/png", FileName: "a.png", Data: encode("img")}},
+		Files:  []bridgeFileData{{MimeType: "text/plain", FileName: "a.txt", Data: encode("doc")}},
+	}, 2, 4, 7)
+	if err != nil {
+		t.Fatalf("valid attachments rejected: %v", err)
+	}
+	if len(images) != 1 || len(files) != 1 {
+		t.Fatalf("decoded images/files = %d/%d, want 1/1", len(images), len(files))
+	}
+}
+
+func TestBridge_WebSocketReadLimitClosesOversizedMessage(t *testing.T) {
+	bs, wsURL := startTestBridge(t, "")
+	bs.maxReadBytes = 256
+	conn := dialWS(t, wsURL, nil)
+	register(t, conn, "limited", []string{"text"})
+
+	if err := conn.WriteJSON(map[string]any{
+		"type":        "message",
+		"session_key": "limited:user:user",
+		"user_id":     "user",
+		"content":     strings.Repeat("x", 512),
+	}); err != nil {
+		t.Fatalf("write oversized message: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("expected oversized websocket message to close the connection")
+	}
 }
 
 type bridgeAPIResponse struct {

@@ -55,3 +55,20 @@ func TestGetModel_PrefersActiveProviderModel(t *testing.T) {
 		t.Fatalf("GetModel() = %q, want opus", got)
 	}
 }
+
+func TestIsClaudeModelFiltersAggregatedProviderCatalog(t *testing.T) {
+	tests := map[string]bool{
+		"claude-sonnet-4-6":                          true,
+		"waninter-anthropic/claude-opus-4-6":         true,
+		"gateway/team/anthropic/claude-haiku-4-5":    true,
+		"waninter-openai/gpt-5.3-codex-spark":        false,
+		"waninter-deepseek/deepseek-v3.2":            false,
+		"waninter-moonshot/kimi-k2.5":                false,
+		"provider/not-claude-sonnet-compatible-name": false,
+	}
+	for model, want := range tests {
+		if got := isClaudeModel(model); got != want {
+			t.Errorf("isClaudeModel(%q) = %v, want %v", model, got, want)
+		}
+	}
+}

@@ -134,6 +134,7 @@ token = "your-secret"     # 认证密钥，必填
   "user_id": "user123",
   "user_name": "Alice",
   "content": "你好，你能做什么？",
+  "model": "provider/gpt-5.3-codex",
   "reply_ctx": "conv-abc-123",
   "images": [],
   "files": [],
@@ -150,7 +151,8 @@ token = "your-secret"     # 认证密钥，必填
 | `session_key` | string | 是 | 唯一会话标识。格式：`{platform}:{scope}:{user}`。由适配器定义组合方式。 |
 | `user_id` | string | 是 | 用户在平台上的唯一标识。 |
 | `user_name` | string | 否 | 显示名称。 |
-| `content` | string | 是 | 文本内容。 |
+| `content` | string | 否 | 文本内容；没有文字时必须至少携带一个附件。 |
+| `model` | string | 否 | 此会话使用的模型 ID。只作用于该会话，不修改项目默认模型；后续未填写时继续使用会话已选模型。 |
 | `reply_ctx` | string | 是 | 不透明的上下文字符串，适配器需要它来路由回复。cc-connect 会在每个回复中原样回传。 |
 | `images` | Image[] | 否 | 附带的图片（见[图片对象](#图片对象)）。 |
 | `files` | File[] | 否 | 附带的文件（见[文件对象](#文件对象)）。 |
@@ -551,6 +553,11 @@ token = "your-secret"     # 认证密钥，必填
 }
 ```
 
+单条 `message` 最多携带 5 个图片、文件和音频附件；单个附件最大 10 MiB，
+全部附件解码后的总大小最大 25 MiB。Bridge 会在 Base64 解码前后都校验大小，
+并将 WebSocket 单帧限制为 40 MiB。超过限制或 Base64 无效时会拒绝整条消息，
+不会只丢弃其中一个附件后继续执行。
+
 ### 音频对象
 
 ```json
@@ -660,7 +667,7 @@ Session key 遵循以下格式：
 
 ---
 
-## 会话管理 REST API
+## 模型与会话 REST API
 
 除了用于实时消息的 WebSocket 协议外，Bridge Server 还在同一端口上暴露 HTTP REST 端点用于会话管理。适配器可以通过这些接口列出、创建、切换和删除会话，无需单独配置管理 API。
 
@@ -685,6 +692,41 @@ Session key 遵循以下格式：
 ### 端点
 
 所有端点相对于 Bridge Server 基础 URL（如 `http://localhost:9810`）。
+
+#### GET /bridge/models
+
+列出指定项目当前上游可用的模型。提供 `session_key` 时，`selected` 优先返回
+该会话已经选择的模型；否则返回项目默认模型。
+
+**Query 参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `project` | string | 是 | Bridge 中已注册的项目名。 |
+| `session_key` | string | 否 | 用于读取会话级模型选择。 |
+
+**响应：**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "models": [
+      {
+        "name": "provider/gpt-5.3-codex",
+        "description": "Coding model",
+        "alias": "codex"
+      }
+    ],
+    "selected": "provider/gpt-5.3-codex"
+  }
+}
+```
+
+`name` 是发送 `message.model` 时必须使用的完整 ID。调用方不应自行删除提供商
+命名空间；`description` 和 `alias` 可能为空。
+
+---
 
 #### GET /bridge/sessions
 

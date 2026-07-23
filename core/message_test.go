@@ -1,9 +1,11 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -173,6 +175,114 @@ func TestSaveFilesToDisk_AbsoluteWorkDirReturnsAbsolutePaths(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("returned path %q does not exist on disk: %v", p, err)
 		}
+	}
+}
+
+func TestSaveFilesToDisk_DoesNotOverwriteSameName(t *testing.T) {
+	workDir := t.TempDir()
+	first := SaveFilesToDisk(workDir, []FileAttachment{{FileName: "notes.txt", Data: []byte("first")}})
+	second := SaveFilesToDisk(workDir, []FileAttachment{{FileName: "notes.txt", Data: []byte("second")}})
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("saved path counts = %d/%d, want 1/1", len(first), len(second))
+	}
+	if first[0] == second[0] {
+		t.Fatalf("same-name attachments reused path %q", first[0])
+	}
+	for path, want := range map[string]string{first[0]: "first", second[0]: "second"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %q: %v", path, err)
+		}
+		if got := string(data); got != want {
+			t.Fatalf("content at %q = %q, want %q", path, got, want)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %q: %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("mode at %q = %o, want 600", path, got)
+		}
+	}
+}
+
+func TestSaveFilesToDisk_ConcurrentSameNameUsesUniquePaths(t *testing.T) {
+	workDir := t.TempDir()
+	const writers = 12
+	type result struct {
+		path string
+		want string
+	}
+	results := make(chan result, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		want := fmt.Sprintf("payload-%d", i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			paths := SaveFilesToDisk(workDir, []FileAttachment{{FileName: "shared.txt", Data: []byte(want)}})
+			if len(paths) == 1 {
+				results <- result{path: paths[0], want: want}
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	seen := make(map[string]struct{}, writers)
+	for item := range results {
+		if _, exists := seen[item.path]; exists {
+			t.Fatalf("concurrent attachment path reused: %q", item.path)
+		}
+		seen[item.path] = struct{}{}
+		data, err := os.ReadFile(item.path)
+		if err != nil {
+			t.Fatalf("read %q: %v", item.path, err)
+		}
+		if got := string(data); got != item.want {
+			t.Fatalf("content at %q = %q, want %q", item.path, got, item.want)
+		}
+	}
+	if len(seen) != writers {
+		t.Fatalf("saved %d concurrent attachments, want %d", len(seen), writers)
+	}
+}
+
+func TestSaveFilesToDisk_DoesNotFollowExistingSymlink(t *testing.T) {
+	workDir := t.TempDir()
+	attachDir := filepath.Join(workDir, ".cc-connect", "attachments")
+	if err := os.MkdirAll(attachDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(workDir, "target.txt")
+	if err := os.WriteFile(target, []byte("protected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(attachDir, "linked.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink is unavailable: %v", err)
+	}
+
+	paths := SaveFilesToDisk(workDir, []FileAttachment{{FileName: "linked.txt", Data: []byte("attachment")}})
+	if len(paths) != 1 {
+		t.Fatalf("saved paths = %d, want 1", len(paths))
+	}
+	if paths[0] == link {
+		t.Fatalf("attachment write reused symlink path %q", link)
+	}
+	targetData, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(targetData); got != "protected" {
+		t.Fatalf("symlink target content = %q, want protected", got)
+	}
+	attachmentData, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(attachmentData); got != "attachment" {
+		t.Fatalf("attachment content = %q, want attachment", got)
 	}
 }
 

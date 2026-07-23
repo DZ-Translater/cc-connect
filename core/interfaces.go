@@ -491,6 +491,14 @@ type ModelSwitcher interface {
 	AvailableModels(ctx context.Context) []ModelOption
 }
 
+// SessionModelStarter is an optional interface for agents that can start or
+// resume one session with an explicit model without changing the shared agent
+// default. Callers must prefer this over SetModel when a model choice belongs
+// to one external conversation rather than the whole project.
+type SessionModelStarter interface {
+	StartSessionWithModel(ctx context.Context, sessionID, model string) (AgentSession, error)
+}
+
 // ReasoningEffortSwitcher is an optional interface for agents that support
 // runtime switching of reasoning effort.
 type ReasoningEffortSwitcher interface {

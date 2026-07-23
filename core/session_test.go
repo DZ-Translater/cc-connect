@@ -157,6 +157,33 @@ func TestSessionManager_Persistence(t *testing.T) {
 	}
 }
 
+func TestSessionManager_PersistsConversationRuntimeState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sessions.json")
+	lastActivity := time.Date(2026, time.July, 23, 10, 30, 0, 0, time.UTC)
+
+	sm1 := NewSessionManager(path)
+	session := sm1.GetOrCreateActive("bridge:user:conversation")
+	session.SetActiveProvider("provider-a")
+	session.SetActiveModel("provider/model-a")
+	session.mu.Lock()
+	session.LastUserActivity = lastActivity
+	session.mu.Unlock()
+	sm1.Save()
+
+	sm2 := NewSessionManager(path)
+	reloaded := sm2.GetOrCreateActive("bridge:user:conversation")
+	if got := reloaded.GetActiveProvider(); got != "provider-a" {
+		t.Fatalf("active provider after reload = %q, want provider-a", got)
+	}
+	if got := reloaded.GetActiveModel(); got != "provider/model-a" {
+		t.Fatalf("active model after reload = %q, want provider/model-a", got)
+	}
+	if got := reloaded.GetLastUserActivity(); !got.Equal(lastActivity) {
+		t.Fatalf("last user activity after reload = %v, want %v", got, lastActivity)
+	}
+}
+
 func TestSessionManager_GetOrCreateActive_Persists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")
@@ -1117,4 +1144,3 @@ func TestKnownAgentSessionIDs_ResetAllSessionsBug(t *testing.T) {
 		t.Fatalf("filterOwnedSessions returned %d, want 3", len(filtered))
 	}
 }
-

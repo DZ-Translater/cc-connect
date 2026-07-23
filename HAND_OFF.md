@@ -92,6 +92,7 @@ HTTP `401`。
   "user_id": "scheduler",
   "user_name": "scheduler",
   "reply_ctx": "job-001",
+  "model": "waninter-openai/gpt-5.3-codex-spark",
   "content": "检查当前仓库的测试失败原因并修复。"
 }
 ```
@@ -100,9 +101,12 @@ HTTP `401`。
 
 - `project` 必须是 `dianzhan-claude` 或 `dianzhan-codex`。
 - `msg_id` 用于调用方追踪，建议全局唯一。
+- `model` 可选，填写上游返回的完整模型 ID。选择会按 `session_key` 保存并在
+  后续恢复时继续使用，不会修改同项目其他会话的默认模型。
 - `reply_ctx` 是调用方自己的不透明值，服务端会在回复中原样返回；不要把它当作
   Agent 会话 ID。
-- 图片、文件和音频使用 Base64，结构见完整协议文档。
+- 图片、文件和音频使用 Base64，结构见完整协议文档。单条消息最多 5 个附件，
+  单个最大 10 MiB、解码后合计最大 25 MiB；任一附件无效会拒绝整条消息。
 
 ### 3.3 接收回复
 
@@ -243,7 +247,7 @@ async def main():
 asyncio.run(main())
 ```
 
-## 5. 会话 REST API
+## 5. 模型与会话 REST API
 
 REST API 与 WebSocket 使用同一个端口和 Token。所有响应都是：
 
@@ -258,6 +262,12 @@ REST API 与 WebSocket 使用同一个端口和 Token。所有响应都是：
 export BRIDGE=http://127.0.0.1:9810
 export SESSION_KEY='task-api-example:dianzhan:example-001'
 export PROJECT=dianzhan-codex
+
+# 获取上游模型列表；session_key 可选，用于返回该会话当前选择
+curl -sS -H "Authorization: Bearer ${CC_BRIDGE_TOKEN}" \
+  --get "${BRIDGE}/bridge/models" \
+  --data-urlencode "project=${PROJECT}" \
+  --data-urlencode "session_key=${SESSION_KEY}"
 
 # 列出会话
 curl -sS -H "Authorization: Bearer ${CC_BRIDGE_TOKEN}" \

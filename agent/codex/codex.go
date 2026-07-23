@@ -258,7 +258,10 @@ func isCodexChatModel(id string) bool {
 	if id == "" {
 		return false
 	}
-	lower := strings.ToLower(id)
+	lower := strings.ToLower(strings.TrimSpace(id))
+	if slash := strings.LastIndexByte(lower, '/'); slash >= 0 {
+		lower = lower[slash+1:]
+	}
 	for _, s := range nonChatSubstrings {
 		if strings.Contains(lower, s) {
 			return false
@@ -305,7 +308,7 @@ func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
-	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/v1/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", core.ProviderModelsURL(baseURL), nil)
 	if err != nil {
 		return nil
 	}
@@ -462,6 +465,16 @@ func (a *Agent) SetSessionEnv(env []string) {
 }
 
 func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentSession, error) {
+	return a.startSession(ctx, sessionID, "")
+}
+
+// StartSessionWithModel starts or resumes one Codex session with an explicit
+// model while leaving the project-level default untouched.
+func (a *Agent) StartSessionWithModel(ctx context.Context, sessionID, modelOverride string) (core.AgentSession, error) {
+	return a.startSession(ctx, sessionID, strings.TrimSpace(modelOverride))
+}
+
+func (a *Agent) startSession(ctx context.Context, sessionID, modelOverride string) (core.AgentSession, error) {
 	a.mu.Lock()
 	mode := a.mode
 	model := a.model
@@ -487,6 +500,9 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 			model = m
 		}
 		baseURL = a.providers[a.activeIdx].BaseURL
+	}
+	if modelOverride != "" {
+		model = modelOverride
 	}
 	provName, provAPIKey, provWireAPI, provHeaders := a.activeProviderCodexConfig()
 	a.mu.Unlock()

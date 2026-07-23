@@ -129,8 +129,8 @@ func SaveFilesToDisk(workDir string, files []FileAttachment) []string {
 		if fname == "" {
 			fname = fmt.Sprintf("file_%d_%d", time.Now().UnixMilli(), i)
 		}
-		fpath := filepath.Join(attachDir, fname)
-		if err := os.WriteFile(fpath, f.Data, 0o644); err != nil {
+		fpath, err := writeUniqueAttachmentFile(attachDir, fname, f.Data)
+		if err != nil {
 			slog.Error("SaveFilesToDisk: write failed", "error", err)
 			continue
 		}
@@ -138,6 +138,54 @@ func SaveFilesToDisk(workDir string, files []FileAttachment) []string {
 		slog.Debug("SaveFilesToDisk: file saved", "path", fpath, "name", f.FileName, "mime", f.MimeType, "size", len(f.Data))
 	}
 	return paths
+}
+
+// writeUniqueAttachmentFile creates an attachment without replacing an
+// existing path. Besides keeping attachments from separate conversations
+// isolated, O_EXCL prevents a pre-existing symlink from redirecting the write.
+func writeUniqueAttachmentFile(dir, name string, data []byte) (string, error) {
+	path := filepath.Join(dir, name)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if !os.IsExist(err) {
+			return "", err
+		}
+		file, err = os.CreateTemp(dir, uniqueAttachmentPattern(name))
+		if err != nil {
+			return "", err
+		}
+		path = file.Name()
+	}
+
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func uniqueAttachmentPattern(name string) string {
+	ext := filepath.Ext(name)
+	if len(ext) > 32 {
+		ext = ""
+	}
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	var bounded strings.Builder
+	for _, r := range stem {
+		if bounded.Len()+len(string(r)) > 80 {
+			break
+		}
+		bounded.WriteRune(r)
+	}
+	if bounded.Len() == 0 {
+		bounded.WriteString("attachment")
+	}
+	return bounded.String() + "-*" + ext
 }
 
 // sanitizeAttachmentFileName reduces a user-supplied attachment filename to a
@@ -227,6 +275,8 @@ type Message struct {
 	ReplyCtx     any                 // platform-specific context needed for replying
 	FromVoice    bool                // true if message originated from voice transcription
 	ModeOverride string              // if set, temporarily override agent permission mode for this message
+
+	ModelOverride string // if set, select a model for this conversation without changing the project default
 	// IsPermissionResponse is set by inline-button / card-action paths in
 	// platforms when a synthesized message is forwarded as a permission
 	// decision (e.g. Telegram handleCallbackQuery for perm:allow/deny,

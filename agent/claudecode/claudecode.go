@@ -374,6 +374,19 @@ func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
 	}
 }
 
+// isClaudeModel accepts Claude model IDs returned directly or behind a
+// provider namespace such as "waninter-anthropic/claude-sonnet-4-6". The
+// original ID is preserved for CLI routing; only the final path component is
+// inspected so an aggregated /models endpoint does not expose GPT, Kimi, or
+// other models that Claude Code cannot drive through its Anthropic protocol.
+func isClaudeModel(id string) bool {
+	modelID := strings.ToLower(strings.TrimSpace(id))
+	if slash := strings.LastIndexByte(modelID, '/'); slash >= 0 {
+		modelID = modelID[slash+1:]
+	}
+	return strings.HasPrefix(modelID, "claude-")
+}
+
 func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
 	a.mu.Lock()
 	apiKey := ""
@@ -398,7 +411,7 @@ func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
-	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/v1/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", core.ProviderModelsURL(baseURL), nil)
 	if err != nil {
 		return nil
 	}
@@ -427,7 +440,9 @@ func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
 
 	var models []core.ModelOption
 	for _, m := range result.Data {
-		models = append(models, core.ModelOption{Name: m.ID, Desc: m.DisplayName})
+		if isClaudeModel(m.ID) {
+			models = append(models, core.ModelOption{Name: m.ID, Desc: m.DisplayName})
+		}
 	}
 	return models
 }
@@ -490,6 +505,16 @@ func validateSessionIDInProject(homeDir, workDir, sessionID string) bool {
 
 // StartSession creates a persistent interactive Claude Code session.
 func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentSession, error) {
+	return a.startSession(ctx, sessionID, "")
+}
+
+// StartSessionWithModel starts or resumes one Claude Code session with an
+// explicit model while leaving the project-level default untouched.
+func (a *Agent) StartSessionWithModel(ctx context.Context, sessionID, modelOverride string) (core.AgentSession, error) {
+	return a.startSession(ctx, sessionID, strings.TrimSpace(modelOverride))
+}
+
+func (a *Agent) startSession(ctx context.Context, sessionID, modelOverride string) (core.AgentSession, error) {
 	a.mu.Lock()
 	tools := make([]string, len(a.allowedTools))
 	copy(tools, a.allowedTools)
@@ -511,6 +536,9 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 		if m := a.providers[activeIdx].Model; m != "" {
 			model = m
 		}
+	}
+	if modelOverride != "" {
+		model = modelOverride
 	}
 	slog.Debug("claudecode: StartSession provider state",
 		"activeIdx", activeIdx,

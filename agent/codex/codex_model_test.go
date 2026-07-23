@@ -117,6 +117,8 @@ func TestIsCodexChatModel(t *testing.T) {
 		{"gpt-5.6-sol", true},
 		{"gpt-5.6-terra", true},
 		{"gpt-5.6-luna", true},
+		{"waninter-openai/gpt-5.3-codex-spark", true},
+		{"gateway/team/openai/gpt-5.4", true},
 
 		// Case insensitivity (defensive; ids from /v1/models are usually lower).
 		{"GPT-5.6", true},
@@ -139,6 +141,7 @@ func TestIsCodexChatModel(t *testing.T) {
 		{"gpt-image-1", false},
 		{"text-moderation-latest", false},
 		{"omni-moderation-latest", false},
+		{"waninter-openai/gpt-image-1", false},
 
 		// Unrelated model families that should not be surfaced.
 		{"babbage-002", false},

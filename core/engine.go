@@ -506,6 +506,7 @@ type queuedMessage struct {
 // interactiveState tracks a running interactive agent session and its permission state.
 type interactiveState struct {
 	agentSession             AgentSession
+	model                    string
 	platform                 Platform
 	replyCtx                 any
 	currentMessageID         string
@@ -2959,10 +2960,14 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 
 	session := sessions.GetOrCreateActive(msg.SessionKey)
 	sessions.UpdateUserMeta(msg.SessionKey, msg.UserName, msg.ChatName)
+	queuedModel := strings.TrimSpace(msg.ModelOverride)
+	if queuedModel == "" {
+		queuedModel = session.GetActiveModel()
+	}
 	// Ensure an interactiveState entry exists before taking the session lock.
 	// Without this, concurrent messages can observe the session as busy during
 	// startup but still find no state to queue into.
-	e.ensureInteractiveStateForQueueing(interactiveKey, p, msg.ReplyCtx)
+	e.ensureInteractiveStateForQueueing(interactiveKey, p, msg.ReplyCtx, queuedModel)
 	if !session.TryLock() {
 		if e.stopCurrentMessageIfRecalled(interactiveKey) {
 			if e.waitForSessionLock(session, recalledStopLockWait) {
@@ -3001,7 +3006,7 @@ sessionLocked:
 	// processor so messages arriving during session startup can be queued
 	// instead of dropped (issue #565). This is still needed after idle auto-
 	// reset because cleanupInteractiveState may remove the early placeholder.
-	e.ensureInteractiveStateForQueueing(interactiveKey, p, msg.ReplyCtx)
+	e.ensureInteractiveStateForQueueing(interactiveKey, p, msg.ReplyCtx, queuedModel)
 	e.noteUserMessageAccepted(interactiveKey, msg.UserMessageTimeMs)
 	slog.Debug("user message accepted for processing",
 		"platform", msg.Platform,
@@ -3100,6 +3105,13 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 	if state.agentSession != nil && !state.agentSession.Alive() {
 		return false
 	}
+	if requestedModel := strings.TrimSpace(msg.ModelOverride); requestedModel != "" && requestedModel != state.model {
+		// A queued turn cannot recycle the live process safely while the current
+		// turn still owns its event stream. Reject it instead of silently running
+		// the request with the wrong conversation model.
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
+		return true
+	}
 
 	// Only queue metadata — do NOT send to agent stdin yet.
 	// The agent CLI may treat a mid-turn stdin message as part of the
@@ -3155,13 +3167,18 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 // is still starting up to be queued instead of dropped (issue #565).
 // The placeholder has agentSession==nil; getOrCreateInteractiveStateWith will
 // replace it with a fully initialized state once the agent process is spawned.
-func (e *Engine) ensureInteractiveStateForQueueing(key string, p Platform, replyCtx any) {
+func (e *Engine) ensureInteractiveStateForQueueing(key string, p Platform, replyCtx any, models ...string) {
 	e.interactiveMu.Lock()
 	defer e.interactiveMu.Unlock()
+	model := ""
+	if len(models) > 0 {
+		model = strings.TrimSpace(models[0])
+	}
 	if _, ok := e.interactiveStates[key]; !ok {
 		e.interactiveStates[key] = &interactiveState{
 			platform:         p,
 			replyCtx:         replyCtx,
+			model:            model,
 			eventsNeedResync: true,
 		}
 	}
@@ -3646,6 +3663,11 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 
 	e.i18n.DetectAndSet(msg.Content)
 	session.AddHistory("user", msg.Content)
+	requestedModel := strings.TrimSpace(msg.ModelOverride)
+	if requestedModel != "" && requestedModel != session.GetActiveModel() {
+		session.SetActiveModel(requestedModel)
+	}
+	sessionModel := session.GetActiveModel()
 	// Persist user message immediately so crashes between user input and
 	// assistant reply don't lose it (the assistant-side Save below depends
 	// on the turn completing without a process crash).
@@ -3656,7 +3678,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	if agent != e.agent {
 		agentOverride = agent
 	}
-	state := e.getOrCreateInteractiveStateWith(interactiveKey, p, msg.ReplyCtx, session, sessions, agentOverride, ccSessionKey)
+	state := e.getOrCreateInteractiveStateWith(interactiveKey, p, msg.ReplyCtx, session, sessions, agentOverride, ccSessionKey, sessionModel)
 
 	// Set workspaceDir on the state for idle reaper identification
 	if workspaceDir != "" {
@@ -3925,9 +3947,13 @@ func adoptPendingFromPlaceholder(existing, newState *interactiveState) {
 
 // When agentOverride is non-nil it is used instead of e.agent to start the session.
 // ccSessionKey, when non-empty, is used for CC_SESSION_KEY env injection; otherwise sessionKey is used.
-func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, replyCtx any, session *Session, sessions *SessionManager, agentOverride Agent, ccSessionKey string) *interactiveState {
+func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, replyCtx any, session *Session, sessions *SessionManager, agentOverride Agent, ccSessionKey string, modelOverrides ...string) *interactiveState {
 	e.interactiveMu.Lock()
 	defer e.interactiveMu.Unlock()
+	modelOverride := ""
+	if len(modelOverrides) > 0 {
+		modelOverride = strings.TrimSpace(modelOverrides[0])
+	}
 
 	state, ok := e.interactiveStates[sessionKey]
 	if ok && state.agentSession != nil && state.agentSession.Alive() {
@@ -3943,6 +3969,9 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 		// If wantID is empty (/new, cleared session) but the process already has
 		// a concrete ID, reusing would keep --resume context — recycle (#238).
 		needRecycle := currentID != "" && (wantID == "" || wantID != currentID)
+		if modelOverride != "" && state.model != modelOverride {
+			needRecycle = true
+		}
 		if !needRecycle {
 			return state
 		}
@@ -4006,7 +4035,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 	// Check if context is already canceled (e.g. during shutdown/restart)
 	if e.ctx.Err() != nil {
 		slog.Debug("skipping session start: context canceled", "session_key", sessionKey)
-		newState := &interactiveState{platform: p, replyCtx: replyCtx, agent: agent, eventsNeedResync: true}
+		newState := &interactiveState{platform: p, replyCtx: replyCtx, agent: agent, model: modelOverride, eventsNeedResync: true}
 		adoptPendingFromPlaceholder(e.interactiveStates[sessionKey], newState)
 		state = newState
 		e.interactiveStates[sessionKey] = state
@@ -4042,7 +4071,17 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 	}
 	isResume := startSessionID != ""
 	startAt := time.Now()
-	agentSession, err := agent.StartSession(e.ctx, startSessionID)
+	startAgentSession := func(id string) (AgentSession, error) {
+		if modelOverride == "" {
+			return agent.StartSession(e.ctx, id)
+		}
+		starter, ok := agent.(SessionModelStarter)
+		if !ok {
+			return nil, fmt.Errorf("agent %s does not support conversation-scoped model selection", agent.Name())
+		}
+		return starter.StartSessionWithModel(e.ctx, id, modelOverride)
+	}
+	agentSession, err := startAgentSession(startSessionID)
 	startElapsed := time.Since(startAt)
 	if err != nil {
 		// If resume/continue failed, try a fresh session as fallback.
@@ -4055,7 +4094,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 			session.SetAgentSessionID("", agent.Name())
 			sessions.Save()
 			startAt = time.Now()
-			agentSession, err = agent.StartSession(e.ctx, "")
+			agentSession, err = startAgentSession("")
 			startElapsed = time.Since(startAt)
 			if err == nil {
 				slog.Info("fresh session started after resume failure",
@@ -4070,7 +4109,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 				Platform:   p.Name(),
 				Error:      fmt.Sprintf("failed to start session: %v", err),
 			})
-			newState := &interactiveState{platform: p, replyCtx: replyCtx, agent: agent, eventsNeedResync: true}
+			newState := &interactiveState{platform: p, replyCtx: replyCtx, agent: agent, model: modelOverride, eventsNeedResync: true}
 			adoptPendingFromPlaceholder(e.interactiveStates[sessionKey], newState)
 			state = newState
 			e.interactiveStates[sessionKey] = state
@@ -4107,8 +4146,15 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 		}
 	}
 
+	selectedModel := modelOverride
+	if getter, ok := agentSession.(interface{ GetModel() string }); ok {
+		if current := strings.TrimSpace(getter.GetModel()); current != "" {
+			selectedModel = current
+		}
+	}
 	newState := &interactiveState{
 		agentSession:     agentSession,
+		model:            selectedModel,
 		platform:         p,
 		replyCtx:         replyCtx,
 		agent:            agent,

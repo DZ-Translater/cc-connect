@@ -12,8 +12,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	bridgeMaxAttachmentCount      = 5
+	bridgeMaxAttachmentBytes      = 10 << 20
+	bridgeMaxTotalAttachmentBytes = 25 << 20
+	// 25 MiB of raw attachments expands to about 34 MiB as base64. Leave room
+	// for JSON metadata and text while bounding memory before JSON decoding.
+	bridgeDefaultMaxReadBytes int64 = 40 << 20
 )
 
 // ---------------------------------------------------------------------------
@@ -24,12 +34,13 @@ import (
 // A single instance is created globally; each project engine receives a
 // lightweight BridgePlatform handle that delegates to this server.
 type BridgeServer struct {
-	port        int
-	token       string
-	path        string
-	corsOrigins []string
-	insecure    bool // allow running without token (local dev only)
-	server      *http.Server
+	port         int
+	token        string
+	path         string
+	corsOrigins  []string
+	insecure     bool // allow running without token (local dev only)
+	server       *http.Server
+	maxReadBytes int64
 
 	mu       sync.RWMutex
 	adapters map[string]*bridgeAdapter // platform name → adapter
@@ -114,6 +125,7 @@ type bridgeMessage struct {
 	Content    string            `json:"content"`
 	ReplyCtx   string            `json:"reply_ctx"`
 	Project    string            `json:"project,omitempty"`
+	Model      string            `json:"model,omitempty"`
 	Images     []bridgeImageData `json:"images,omitempty"`
 	Files      []bridgeFileData  `json:"files,omitempty"`
 	Audio      *bridgeAudioData  `json:"audio,omitempty"`
@@ -184,13 +196,14 @@ func newBridgeServer(port int, token, path string, corsOrigins []string, insecur
 	}
 
 	return &BridgeServer{
-		port:        port,
-		token:       token,
-		path:        path,
-		corsOrigins: corsOrigins,
-		insecure:    insecure,
-		adapters:    make(map[string]*bridgeAdapter),
-		engines:     make(map[string]*bridgeEngineRef),
+		port:         port,
+		token:        token,
+		path:         path,
+		corsOrigins:  corsOrigins,
+		insecure:     insecure,
+		maxReadBytes: bridgeDefaultMaxReadBytes,
+		adapters:     make(map[string]*bridgeAdapter),
+		engines:      make(map[string]*bridgeEngineRef),
 	}
 }
 
@@ -216,6 +229,7 @@ func (bs *BridgeServer) Start() {
 	mux.HandleFunc(bs.path, bs.handleWS)
 
 	// Session management REST endpoints (with CORS support)
+	mux.HandleFunc("/bridge/models", bs.corsHTTP(bs.authHTTP(bs.handleModels)))
 	mux.HandleFunc("/bridge/sessions", bs.corsHTTP(bs.authHTTP(bs.handleSessions)))
 	mux.HandleFunc("/bridge/sessions/", bs.corsHTTP(bs.authHTTP(bs.handleSessionRoutes)))
 
@@ -787,6 +801,7 @@ func (bs *BridgeServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		slog.Error("bridge: websocket upgrade failed", "error", err)
 		return
 	}
+	conn.SetReadLimit(bs.maxReadBytes)
 
 	slog.Info("bridge: new connection", "remote", conn.RemoteAddr())
 	bs.handleConnection(conn)
@@ -923,6 +938,11 @@ func (a *bridgeAdapter) handleMessage(raw json.RawMessage) {
 		slog.Debug("bridge: message missing required fields", "platform", a.platform)
 		return
 	}
+	model := strings.TrimSpace(m.Model)
+	if !validBridgeModel(model) {
+		a.rejectMessage(m, "invalid_model", "invalid model")
+		return
+	}
 
 	ref := a.server.resolveEngine(m.SessionKey, m.Project)
 	if ref == nil {
@@ -931,45 +951,25 @@ func (a *bridgeAdapter) handleMessage(raw json.RawMessage) {
 	}
 
 	msg := &Message{
-		SessionKey: m.SessionKey,
-		Platform:   a.platform,
-		MessageID:  m.MsgID,
-		UserID:     m.UserID,
-		UserName:   m.UserName,
-		Content:    m.Content,
-		ReplyCtx:   newBridgeReplyCtx(a, m.SessionKey, m.ReplyCtx),
+		SessionKey:    m.SessionKey,
+		Platform:      a.platform,
+		MessageID:     m.MsgID,
+		UserID:        m.UserID,
+		UserName:      m.UserName,
+		Content:       m.Content,
+		ModelOverride: model,
+		ReplyCtx:      newBridgeReplyCtx(a, m.SessionKey, m.ReplyCtx),
 	}
 
-	for _, img := range m.Images {
-		data, err := base64.StdEncoding.DecodeString(img.Data)
-		if err != nil {
-			slog.Debug("bridge: invalid image base64", "error", err)
-			continue
-		}
-		msg.Images = append(msg.Images, ImageAttachment{
-			MimeType: img.MimeType, Data: data, FileName: img.FileName,
-		})
+	images, files, audio, err := decodeBridgeAttachments(m)
+	if err != nil {
+		slog.Warn("bridge: rejected attachments", "platform", a.platform, "session_key", m.SessionKey, "error", err)
+		a.rejectMessage(m, "invalid_attachment", "invalid attachment payload")
+		return
 	}
-
-	for _, f := range m.Files {
-		data, err := base64.StdEncoding.DecodeString(f.Data)
-		if err != nil {
-			slog.Debug("bridge: invalid file base64", "error", err)
-			continue
-		}
-		msg.Files = append(msg.Files, FileAttachment{
-			MimeType: f.MimeType, Data: data, FileName: f.FileName,
-		})
-	}
-
-	if m.Audio != nil {
-		if data, err := base64.StdEncoding.DecodeString(m.Audio.Data); err == nil {
-			msg.Audio = &AudioAttachment{
-				MimeType: m.Audio.MimeType, Data: data,
-				Format: m.Audio.Format, Duration: m.Audio.Duration,
-			}
-		}
-	}
+	msg.Images = images
+	msg.Files = files
+	msg.Audio = audio
 
 	slog.Info("bridge: message received",
 		"platform", a.platform, "session_key", m.SessionKey,
@@ -978,6 +978,113 @@ func (a *bridgeAdapter) handleMessage(raw json.RawMessage) {
 
 	if ref.platform.handler != nil {
 		ref.platform.handler(ref.platform, msg)
+	}
+}
+
+func validBridgeModel(model string) bool {
+	if len(model) > 255 {
+		return false
+	}
+	return strings.IndexFunc(model, unicode.IsControl) < 0
+}
+
+func decodeBridgeAttachmentData(encoded string, maxBytes int) ([]byte, error) {
+	if len(encoded) > base64.StdEncoding.EncodedLen(maxBytes) {
+		return nil, fmt.Errorf("encoded attachment exceeds %d bytes", maxBytes)
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode base64: %w", err)
+	}
+	if len(data) > maxBytes {
+		return nil, fmt.Errorf("attachment exceeds %d bytes", maxBytes)
+	}
+	return data, nil
+}
+
+func decodeBridgeAttachments(m bridgeMessage) ([]ImageAttachment, []FileAttachment, *AudioAttachment, error) {
+	return decodeBridgeAttachmentsWithLimits(
+		m,
+		bridgeMaxAttachmentCount,
+		bridgeMaxAttachmentBytes,
+		bridgeMaxTotalAttachmentBytes,
+	)
+}
+
+func decodeBridgeAttachmentsWithLimits(m bridgeMessage, maxCount, maxBytes, maxTotalBytes int) ([]ImageAttachment, []FileAttachment, *AudioAttachment, error) {
+	count := len(m.Images) + len(m.Files)
+	if m.Audio != nil {
+		count++
+	}
+	if count > maxCount {
+		return nil, nil, nil, fmt.Errorf("attachment count %d exceeds %d", count, maxCount)
+	}
+
+	total := 0
+	addSize := func(data []byte) error {
+		total += len(data)
+		if total > maxTotalBytes {
+			return fmt.Errorf("total attachment size exceeds %d bytes", maxTotalBytes)
+		}
+		return nil
+	}
+
+	images := make([]ImageAttachment, 0, len(m.Images))
+	for i, img := range m.Images {
+		if len(img.FileName) > 255 || len(img.MimeType) > 255 {
+			return nil, nil, nil, fmt.Errorf("image %d metadata is too long", i)
+		}
+		data, err := decodeBridgeAttachmentData(img.Data, maxBytes)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("image %d: %w", i, err)
+		}
+		if err := addSize(data); err != nil {
+			return nil, nil, nil, err
+		}
+		images = append(images, ImageAttachment{MimeType: img.MimeType, Data: data, FileName: img.FileName})
+	}
+
+	files := make([]FileAttachment, 0, len(m.Files))
+	for i, file := range m.Files {
+		if strings.TrimSpace(file.FileName) == "" || len(file.FileName) > 255 || len(file.MimeType) > 255 {
+			return nil, nil, nil, fmt.Errorf("file %d metadata is invalid", i)
+		}
+		data, err := decodeBridgeAttachmentData(file.Data, maxBytes)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("file %d: %w", i, err)
+		}
+		if err := addSize(data); err != nil {
+			return nil, nil, nil, err
+		}
+		files = append(files, FileAttachment{MimeType: file.MimeType, Data: data, FileName: file.FileName})
+	}
+
+	var audio *AudioAttachment
+	if m.Audio != nil {
+		if len(m.Audio.MimeType) > 255 || len(m.Audio.Format) > 64 {
+			return nil, nil, nil, fmt.Errorf("audio metadata is invalid")
+		}
+		data, err := decodeBridgeAttachmentData(m.Audio.Data, maxBytes)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("audio: %w", err)
+		}
+		if err := addSize(data); err != nil {
+			return nil, nil, nil, err
+		}
+		audio = &AudioAttachment{MimeType: m.Audio.MimeType, Data: data, Format: m.Audio.Format, Duration: m.Audio.Duration}
+	}
+	return images, files, audio, nil
+}
+
+func (a *bridgeAdapter) rejectMessage(m bridgeMessage, code, message string) {
+	if err := a.server.sendToAdapter(a.platform, map[string]any{
+		"type":        "error",
+		"code":        code,
+		"message":     message,
+		"session_key": m.SessionKey,
+		"reply_ctx":   m.ReplyCtx,
+	}); err != nil {
+		slog.Debug("bridge: send rejection failed", "platform", a.platform, "error", err)
 	}
 }
 
@@ -1134,6 +1241,70 @@ func bridgeError(w http.ResponseWriter, status int, msg string) {
 	if err := json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": msg}); err != nil {
 		slog.Debug("bridge: write JSON failed", "error", err)
 	}
+}
+
+type bridgeModelOption struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Alias       string `json:"alias,omitempty"`
+}
+
+// handleModels lists models visible to one project's active provider. The
+// Bridge token protects provider metadata and keeps API credentials server-side.
+func (bs *BridgeServer) handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		bridgeError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	if project == "" {
+		bridgeError(w, http.StatusBadRequest, "project query parameter is required")
+		return
+	}
+
+	bs.enginesMu.RLock()
+	ref := bs.engines[project]
+	bs.enginesMu.RUnlock()
+	if ref == nil || ref.engine == nil {
+		bridgeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	switcher, ok := ref.engine.agent.(ModelSwitcher)
+	if !ok {
+		bridgeError(w, http.StatusBadRequest, "agent does not support model selection")
+		return
+	}
+
+	fetchCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	available := switcher.AvailableModels(fetchCtx)
+	models := make([]bridgeModelOption, 0, len(available))
+	for _, model := range available {
+		id := strings.TrimSpace(model.Name)
+		if id == "" {
+			continue
+		}
+		models = append(models, bridgeModelOption{
+			Name:        id,
+			Description: strings.TrimSpace(model.Desc),
+			Alias:       strings.TrimSpace(model.Alias),
+		})
+	}
+
+	selected := strings.TrimSpace(switcher.GetModel())
+	if sessionKey := strings.TrimSpace(r.URL.Query().Get("session_key")); sessionKey != "" {
+		if sessionID := ref.engine.sessions.ActiveSessionID(sessionKey); sessionID != "" {
+			if session := ref.engine.sessions.FindByID(sessionID); session != nil {
+				if sessionModel := strings.TrimSpace(session.GetActiveModel()); sessionModel != "" {
+					selected = sessionModel
+				}
+			}
+		}
+	}
+	bridgeJSON(w, http.StatusOK, map[string]any{
+		"models":   models,
+		"selected": selected,
+	})
 }
 
 // resolveEngineForSessionKey returns the engine ref for a given session key and optional project.

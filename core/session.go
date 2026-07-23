@@ -18,21 +18,27 @@ const ContinueSession = "__continue__"
 
 // Session tracks one conversation between a user and the agent.
 type Session struct {
-	ID                  string         `json:"id"`
-	Name                string         `json:"name"`
-	AgentSessionID      string         `json:"agent_session_id"`
-	AgentType           string         `json:"agent_type,omitempty"`
-	PastAgentSessionIDs []string       `json:"past_agent_session_ids,omitempty"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	AgentSessionID      string   `json:"agent_session_id"`
+	AgentType           string   `json:"agent_type,omitempty"`
+	PastAgentSessionIDs []string `json:"past_agent_session_ids,omitempty"`
 	// ActiveProvider is the agent provider name that was active when this
 	// session last took a turn. It is restored before --resume so that a
 	// cc-connect process restart does not silently drop a user's
 	// `/provider switch` (the agent_session_id survives on disk while the
 	// in-memory active provider does not). Empty means "no explicit choice
 	// — use whatever the agent's default is".
-	ActiveProvider string         `json:"active_provider,omitempty"`
-	History        []HistoryEntry `json:"history"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	ActiveProvider string `json:"active_provider,omitempty"`
+
+	// ActiveModel is a conversation-scoped model selected by an external
+	// adapter. It is applied when this session starts or resumes without
+	// mutating the shared project agent's default model.
+	ActiveModel string `json:"active_model,omitempty"`
+
+	History   []HistoryEntry `json:"history"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
 	// LastUserActivity records when a real user message was last received.
 	// Unlike UpdatedAt (bumped by every session.Unlock including heartbeats and
 	// unsolicited agent output), this field is only updated when the engine
@@ -181,6 +187,22 @@ func (s *Session) GetActiveProvider() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ActiveProvider
+}
+
+// SetActiveModel records a conversation-scoped model choice. Callers should
+// save the containing SessionManager after changing it.
+func (s *Session) SetActiveModel(model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ActiveModel = model
+}
+
+// GetActiveModel returns the conversation-scoped model choice, or an empty
+// string when the project default should be used.
+func (s *Session) GetActiveModel() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ActiveModel
 }
 
 // SetAgentSessionID atomically sets the agent session ID and agent type.
@@ -642,9 +664,12 @@ func (sm *SessionManager) saveLocked() {
 			AgentSessionID:      agentSID,
 			AgentType:           s.AgentType,
 			PastAgentSessionIDs: append([]string(nil), s.PastAgentSessionIDs...),
+			ActiveProvider:      s.ActiveProvider,
+			ActiveModel:         s.ActiveModel,
 			History:             append([]HistoryEntry(nil), s.History...),
 			CreatedAt:           s.CreatedAt,
 			UpdatedAt:           s.UpdatedAt,
+			LastUserActivity:    s.LastUserActivity,
 		}
 		s.mu.Unlock()
 	}
@@ -828,7 +853,7 @@ func (sm *SessionManager) PruneDuplicateSessions(mergeHistory bool) PruneResult 
 	defer sm.mu.Unlock()
 
 	// Group sessions by baseChat
-	chatSessions := make(map[string][]*Session) // baseChat -> sessions
+	chatSessions := make(map[string][]*Session)  // baseChat -> sessions
 	sessionToBaseChat := make(map[string]string) // session.ID -> baseChat
 
 	for userKey, sessionIDs := range sm.userSessions {

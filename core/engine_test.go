@@ -478,6 +478,31 @@ type stubStrictModelAgent struct {
 	calls  int
 }
 
+type scopedModelTestAgent struct {
+	stubModelModeAgent
+	mu       sync.Mutex
+	starts   []scopedModelStart
+	sessions []*controllableAgentSession
+}
+
+type scopedModelStart struct {
+	resumeID string
+	model    string
+}
+
+func (a *scopedModelTestAgent) StartSessionWithModel(_ context.Context, sessionID, model string) (AgentSession, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("scoped-%d", len(a.starts)+1)
+	}
+	session := newControllableSession(sessionID)
+	session.model = model
+	a.starts = append(a.starts, scopedModelStart{resumeID: sessionID, model: model})
+	a.sessions = append(a.sessions, session)
+	return session, nil
+}
+
 type stubLiveModeSession struct {
 	stubAgentSession
 	modes []string
@@ -7240,6 +7265,54 @@ func waitForInteractiveStateRemoved(t *testing.T, e *Engine, key string) {
 			t.Fatal("expected idle timeout cleanup to remove interactive state")
 		case <-ticker.C:
 		}
+	}
+}
+
+func TestConversationScopedModelsDoNotMutateProjectDefaultOrCrossSessions(t *testing.T) {
+	agent := &scopedModelTestAgent{stubModelModeAgent: stubModelModeAgent{model: "project-default"}}
+	platform := &stubPlatformEngine{n: "bridge"}
+	e := NewEngine("test-project", agent, []Platform{platform}, "", LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
+
+	sessionA := e.sessions.GetOrCreateActive("bridge:user:a")
+	stateA := e.getOrCreateInteractiveStateWith("bridge:user:a", platform, "ctx-a", sessionA, e.sessions, nil, "", "provider/model-a")
+	sessionB := e.sessions.GetOrCreateActive("bridge:user:b")
+	stateB := e.getOrCreateInteractiveStateWith("bridge:user:b", platform, "ctx-b", sessionB, e.sessions, nil, "", "provider/model-b")
+
+	if stateA.model != "provider/model-a" || stateB.model != "provider/model-b" {
+		t.Fatalf("session models = %q/%q", stateA.model, stateB.model)
+	}
+	if got := agent.GetModel(); got != "project-default" {
+		t.Fatalf("project model mutated to %q", got)
+	}
+	oldA := stateA.agentSession.(*controllableAgentSession)
+	resumeID := oldA.CurrentSessionID()
+
+	newStateA := e.getOrCreateInteractiveStateWith("bridge:user:a", platform, "ctx-a2", sessionA, e.sessions, nil, "", "provider/model-c")
+	if newStateA == stateA {
+		t.Fatal("expected a model change to recycle only the target session")
+	}
+	if oldA.Alive() {
+		t.Fatal("previous session remained alive after changing its model")
+	}
+	if !stateB.agentSession.Alive() {
+		t.Fatal("changing session A model closed session B")
+	}
+	if newStateA.model != "provider/model-c" {
+		t.Fatalf("new session A model = %q", newStateA.model)
+	}
+
+	agent.mu.Lock()
+	starts := append([]scopedModelStart(nil), agent.starts...)
+	agent.mu.Unlock()
+	if len(starts) != 3 {
+		t.Fatalf("scoped starts = %d, want 3", len(starts))
+	}
+	if starts[0].model != "provider/model-a" || starts[1].model != "provider/model-b" || starts[2].model != "provider/model-c" {
+		t.Fatalf("scoped start models = %#v", starts)
+	}
+	if starts[2].resumeID != resumeID {
+		t.Fatalf("model switch resumed %q, want %q", starts[2].resumeID, resumeID)
 	}
 }
 
