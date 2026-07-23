@@ -40,6 +40,25 @@ docker compose up -d
 The Bridge port defaults to loopback. Set `BRIDGE_BIND_ADDR` in
 `.env` only when a firewall and TLS reverse proxy protect the public endpoint.
 
+## Codex Sandbox Runtime
+
+The Codex project runs in `full-auto` mode and uses the Codex CLI's bundled
+`bwrap` workspace sandbox for shell tools. Docker's default seccomp and
+AppArmor profiles prevent that nested namespace from starting, so the tracked
+Compose service explicitly uses `seccomp=unconfined` and
+`apparmor=unconfined`. Keep the remaining container boundaries in place:
+non-root user, `cap_drop: ALL`, `no-new-privileges`, read-only root filesystem,
+and only the declared writable volumes.
+
+If those two options are removed, text-only replies may still work while file
+reads and other tool calls fail with `bwrap: No permissions to create a new
+namespace`. Validate the effective options after deployment:
+
+```bash
+docker inspect cc-connect-bridge \
+  --format 'user={{.Config.User}} caps={{json .HostConfig.CapAdd}} security={{json .HostConfig.SecurityOpt}} readonly={{.HostConfig.ReadonlyRootfs}}'
+```
+
 ## Admin Gateway Network
 
 The tracked Bridge Compose file also joins the external, internal-only

@@ -25,8 +25,12 @@ services:
       - /tmp:mode=1777,size=256m
     cap_drop:
       - ALL
+    # Codex full-auto starts its own bwrap workspace sandbox. Docker's default
+    # seccomp and AppArmor profiles block that nested namespace setup.
     security_opt:
       - no-new-privileges:true
+      - seccomp=unconfined
+      - apparmor=unconfined
     pids_limit: 512
     networks:
       default:

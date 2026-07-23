@@ -313,6 +313,10 @@ curl -i http://127.0.0.1:9810/bridge/ws
 - `register_ack.ok=false`：注册帧不是第一帧，或 `platform` 为空。
 - 连接成功但没有回复：检查消息中的 `project`、`session_key`、`user_id`，并确认项目
   名称拼写正确；多项目部署时必须显式指定 `project`。
+- Codex 能回复纯文本、但读取附件或调用工具时报 `bwrap: No permissions to create a
+  new namespace`：确认部署使用仓库中的 Compose 文件，并且容器的
+  `SecurityOpt` 同时包含 `seccomp=unconfined`、`apparmor=unconfined` 和
+  `no-new-privileges`；不要改用会绕过 Codex workspace 沙箱的 `yolo` 模式。
 - 连接被关闭：确认客户端每 30 秒发送应用层 `ping`，并实现断线重连。
 - 服务器重启后 Skills 变更未生效：在 `/srv/cc-connect/skills` 修改后执行
   `docker compose restart`。
