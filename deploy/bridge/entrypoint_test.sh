@@ -5,6 +5,10 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 test_root=$(mktemp -d)
 
 cleanup() {
+    # The test runs as UID 10001, so use Docker's root user to remove the
+    # temporary bind-mount contents before the runner removes its temp dir.
+    docker run --rm -v "$test_root:/test" node:22-bookworm-slim \
+        rm -rf /test/data /test/skills >/dev/null 2>&1 || true
     rm -rf "$test_root"
 }
 trap cleanup EXIT INT TERM
