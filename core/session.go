@@ -16,6 +16,12 @@ import (
 // to use --continue (resume most recent session) instead of a specific session ID.
 const ContinueSession = "__continue__"
 
+// skillsRevisionEnv identifies the shared Skill set injected into newly
+// created native agent conversations. Native agents capture their Skill list
+// when a conversation is created, so a changed revision must not resume a
+// conversation created with an older list.
+const skillsRevisionEnv = "CC_SKILLS_REVISION"
+
 // Session tracks one conversation between a user and the agent.
 type Session struct {
 	ID                  string   `json:"id"`
@@ -297,19 +303,21 @@ type sessionSnapshot struct {
 	PastIDTracking bool                 `json:"past_id_tracking,omitempty"` // true once PastAgentSessionIDs is supported
 	LegacyData     bool                 `json:"legacy_data,omitempty"`      // true while pre-fix sessions exist
 	Version        int                  `json:"version,omitempty"`          // schema version for migration detection
+	SkillsRevision string               `json:"skills_revision,omitempty"`  // shared Skill content used by native sessions
 }
 
 // SessionManager supports multiple named sessions per user with active-session tracking.
 // It can persist state to a JSON file and reload on startup.
 type SessionManager struct {
-	mu            sync.RWMutex
-	sessions      map[string]*Session
-	activeSession map[string]string
-	userSessions  map[string][]string
-	sessionNames  map[string]string    // agent session ID → custom name
-	userMeta      map[string]*UserMeta // sessionKey → display info
-	counter       int64
-	storePath     string // empty = no persistence
+	mu             sync.RWMutex
+	sessions       map[string]*Session
+	activeSession  map[string]string
+	userSessions   map[string][]string
+	sessionNames   map[string]string    // agent session ID → custom name
+	userMeta       map[string]*UserMeta // sessionKey → display info
+	counter        int64
+	storePath      string // empty = no persistence
+	skillsRevision string // shared Skill content revision for native sessions
 
 	// legacyData is true when sessions were loaded from a snapshot that
 	// predates PastAgentSessionIDs tracking. In this state, many sessions
@@ -320,12 +328,13 @@ type SessionManager struct {
 
 func NewSessionManager(storePath string) *SessionManager {
 	sm := &SessionManager{
-		sessions:      make(map[string]*Session),
-		activeSession: make(map[string]string),
-		userSessions:  make(map[string][]string),
-		sessionNames:  make(map[string]string),
-		userMeta:      make(map[string]*UserMeta),
-		storePath:     storePath,
+		sessions:       make(map[string]*Session),
+		activeSession:  make(map[string]string),
+		userSessions:   make(map[string][]string),
+		sessionNames:   make(map[string]string),
+		userMeta:       make(map[string]*UserMeta),
+		storePath:      storePath,
+		skillsRevision: strings.TrimSpace(os.Getenv(skillsRevisionEnv)),
 	}
 	if storePath != "" {
 		sm.load()
@@ -699,6 +708,7 @@ func (sm *SessionManager) saveLocked() {
 		PastIDTracking: true,
 		LegacyData:     sm.legacyData,
 		Version:        snapshotVersion,
+		SkillsRevision: sm.skillsRevision,
 	}
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
@@ -733,6 +743,8 @@ func (sm *SessionManager) load() {
 	sm.sessionNames = snap.SessionNames
 	sm.userMeta = snap.UserMeta
 	sm.counter = snap.Counter
+	configuredSkillsRevision := sm.skillsRevision
+	sm.skillsRevision = snap.SkillsRevision
 	if snap.Version >= snapshotVersion {
 		sm.legacyData = snap.LegacyData
 	} else {
@@ -772,7 +784,45 @@ func (sm *SessionManager) load() {
 		s.stripContinueSessionSentinel()
 	}
 
+	if configuredSkillsRevision != "" {
+		sm.skillsRevision = configuredSkillsRevision
+		if snap.SkillsRevision != configuredSkillsRevision {
+			invalidated := sm.invalidateForSkillsRevision()
+			slog.Info("session: shared Skills changed, native sessions invalidated",
+				"previous_revision", snap.SkillsRevision,
+				"current_revision", configuredSkillsRevision,
+				"sessions", invalidated,
+			)
+			// Persist the revision immediately. Otherwise an idle service would
+			// repeat the migration on every restart until the next user turn.
+			sm.saveLocked()
+		}
+	}
+
 	slog.Info("session: loaded from disk", "path", sm.storePath, "sessions", len(sm.sessions))
+}
+
+// invalidateForSkillsRevision detaches logical cc-connect conversations from
+// native agent conversations created with an older Skill list. Conversation
+// history and user choices stay intact. Past native IDs are deliberately
+// dropped as well so /list and /switch cannot reattach an incompatible thread.
+// The caller must ensure no other goroutine can access the manager.
+func (sm *SessionManager) invalidateForSkillsRevision() int {
+	invalidated := 0
+	for _, s := range sm.sessions {
+		s.mu.Lock()
+		if s.AgentSessionID != "" || len(s.PastAgentSessionIDs) > 0 {
+			s.AgentSessionID = ""
+			s.PastAgentSessionIDs = nil
+			invalidated++
+		}
+		s.mu.Unlock()
+	}
+	// All pre-revision native IDs are intentionally retired. Keeping legacy
+	// filtering disabled here would let /list expose those incompatible
+	// threads again even though their logical sessions were detached above.
+	sm.legacyData = false
+	return invalidated
 }
 
 // InvalidateForAgent clears AgentSessionID on all sessions whose AgentType

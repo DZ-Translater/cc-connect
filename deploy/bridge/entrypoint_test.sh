@@ -54,7 +54,7 @@ run_entrypoint() {
 }
 
 run_entrypoint '
-        for root in "$CLAUDE_CONFIG_DIR/skills" "$CODEX_HOME/skills" "$HOME/.agents/skills"; do
+        for root in "$CLAUDE_CONFIG_DIR/skills" "$HOME/.agents/skills"; do
             test -d "$root"
             test ! -L "$root"
             test -d "$root/example-skill"
@@ -65,6 +65,10 @@ run_entrypoint '
             test -d "$root/removed-skill"
             test ! -e "$root/.gitkeep"
         done
+        test -d "$CODEX_HOME/skills"
+        test ! -L "$CODEX_HOME/skills"
+        test ! -e "$CODEX_HOME/skills/example-skill"
+        test ! -e "$CODEX_HOME/skills/removed-skill"
         if touch /skills/.cc-connect-regression-write 2>/dev/null; then
             rm -f /skills/.cc-connect-regression-write
             echo "shared skills mount unexpectedly writable" >&2
@@ -73,20 +77,51 @@ run_entrypoint '
         mkdir "$CODEX_HOME/skills/.system"
         touch "$CODEX_HOME/skills/.system/installed"
         test -f "$CODEX_HOME/skills/.system/installed"
+        test -n "$CC_SKILLS_REVISION"
+        printf "%s\n" "$CC_SKILLS_REVISION" > /data/skills-revision-initial
+    '
+
+# An unchanged restart must produce the same revision.
+run_entrypoint '
+        test "$CC_SKILLS_REVISION" = "$(cat /data/skills-revision-initial)"
+        test -f "$CODEX_HOME/skills/.system/installed"
     '
 
 printf '%s\n' '---' 'name: example-skill' '---' 'version two' > "$test_root/skills/example-skill/SKILL.md"
-rm -rf "$test_root/skills/removed-skill"
+
+run_entrypoint '
+        test "$CC_SKILLS_REVISION" != "$(cat /data/skills-revision-initial)"
+        printf "%s\n" "$CC_SKILLS_REVISION" > /data/skills-revision-modified
+        grep -q "version two" "$CLAUDE_CONFIG_DIR/skills/example-skill/SKILL.md"
+        grep -q "version two" "$HOME/.agents/skills/example-skill/SKILL.md"
+        test ! -e "$CODEX_HOME/skills/example-skill"
+    '
+
 mkdir -p "$test_root/skills/added-skill"
 printf '%s\n' '---' 'name: added-skill' '---' 'added later' > "$test_root/skills/added-skill/SKILL.md"
 
 run_entrypoint '
-        for root in "$CLAUDE_CONFIG_DIR/skills" "$CODEX_HOME/skills" "$HOME/.agents/skills"; do
+        test "$CC_SKILLS_REVISION" != "$(cat /data/skills-revision-modified)"
+        printf "%s\n" "$CC_SKILLS_REVISION" > /data/skills-revision-added
+        for root in "$CLAUDE_CONFIG_DIR/skills" "$HOME/.agents/skills"; do
             grep -q "version two" "$root/example-skill/SKILL.md"
-            test ! -e "$root/removed-skill"
             test -d "$root/added-skill"
             test ! -L "$root/added-skill"
             test "$(cat "$root/added-skill/.cc-connect-source")" = "/skills/added-skill"
         done
         test -f "$CODEX_HOME/skills/.system/installed"
+        test ! -e "$CODEX_HOME/skills/added-skill"
+    '
+
+rm -rf "$test_root/skills/removed-skill"
+
+run_entrypoint '
+        test "$CC_SKILLS_REVISION" != "$(cat /data/skills-revision-added)"
+        for root in "$CLAUDE_CONFIG_DIR/skills" "$HOME/.agents/skills"; do
+            test ! -e "$root/removed-skill"
+            test -d "$root/example-skill"
+            test -d "$root/added-skill"
+        done
+        test -f "$CODEX_HOME/skills/.system/installed"
+        test ! -e "$CODEX_HOME/skills/removed-skill"
     '

@@ -71,10 +71,19 @@ ssh by 'cd /srv/cc-connect && docker compose restart cc-connect-bridge'
 ```
 
 On every container start, the entrypoint copies valid Skills into the native
-Codex, Claude Code, and shared agent roots under `/data`. Changed Skills are
-replaced and deleted source Skills are removed; CLI-managed content such as
-Codex's `.system` directory is preserved. Do not edit the generated copies
-inside the container because the next restart overwrites them.
+Claude Code directory and the cross-agent `$HOME/.agents/skills` root under
+`/data`. Codex reads user Skills from the cross-agent root; its private
+`$CODEX_HOME/skills` directory is reserved for CLI-managed content such as
+`.system`, avoiding duplicate Skill discovery. Changed Skills are replaced and
+deleted source Skills are removed. Do not edit the generated copies inside the
+container because the next restart overwrites them.
+
+The entrypoint also exports a deterministic `CC_SKILLS_REVISION`. When this
+revision changes, cc-connect preserves each logical conversation, its visible
+history, name, model, and provider, but starts a fresh native Codex/Claude
+thread on the next message. Native threads capture their Skill list at creation
+time, so this one-time refresh is required for newly copied Skills to appear in
+existing Bridge conversations.
 
 ## Admin Gateway Network
 

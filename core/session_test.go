@@ -184,6 +184,99 @@ func TestSessionManager_PersistsConversationRuntimeState(t *testing.T) {
 	}
 }
 
+func TestSessionManager_SameSkillsRevisionPreservesNativeSession(t *testing.T) {
+	t.Setenv(skillsRevisionEnv, "skills-revision-a")
+	path := filepath.Join(t.TempDir(), "sessions.json")
+
+	sm1 := NewSessionManager(path)
+	session := sm1.GetOrCreateActive("bridge:user:conversation")
+	session.SetAgentSessionID("native-session-a", "codex")
+	session.SetAgentSessionID("native-session-b", "codex")
+	sm1.Save()
+
+	sm2 := NewSessionManager(path)
+	reloaded := sm2.GetOrCreateActive("bridge:user:conversation")
+	if got := reloaded.GetAgentSessionID(); got != "native-session-b" {
+		t.Fatalf("AgentSessionID after unchanged Skill revision = %q, want native-session-b", got)
+	}
+	known := sm2.KnownAgentSessionIDs()
+	if _, ok := known["native-session-a"]; !ok {
+		t.Fatal("past native session ID was removed despite unchanged Skill revision")
+	}
+}
+
+func TestSessionManager_ChangedSkillsRevisionInvalidatesNativeSessionOnlyOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	t.Setenv(skillsRevisionEnv, "skills-revision-a")
+
+	sm1 := NewSessionManager(path)
+	session := sm1.GetOrCreateActive("bridge:user:conversation")
+	session.SetAgentInfo("native-session-a", "codex", "medical review")
+	session.SetAgentSessionID("native-session-b", "codex")
+	session.SetActiveProvider("provider-a")
+	session.SetActiveModel("model-a")
+	session.AddHistory("user", "extract terms")
+	sm1.SetSessionName("native-session-b", "named native session")
+	sm1.NewSession("bridge:user:untracked", "legacy untracked")
+	sm1.legacyData = true
+	sm1.Save()
+
+	t.Setenv(skillsRevisionEnv, "skills-revision-b")
+	sm2 := NewSessionManager(path)
+	reloaded := sm2.GetOrCreateActive("bridge:user:conversation")
+	if got := reloaded.GetAgentSessionID(); got != "" {
+		t.Fatalf("AgentSessionID after changed Skill revision = %q, want empty", got)
+	}
+	if got := len(reloaded.PastAgentSessionIDs); got != 0 {
+		t.Fatalf("PastAgentSessionIDs after changed Skill revision = %d, want 0", got)
+	}
+	if got := reloaded.GetName(); got != "medical review" {
+		t.Fatalf("logical session name = %q, want medical review", got)
+	}
+	if got := reloaded.GetActiveProvider(); got != "provider-a" {
+		t.Fatalf("active provider = %q, want provider-a", got)
+	}
+	if got := reloaded.GetActiveModel(); got != "model-a" {
+		t.Fatalf("active model = %q, want model-a", got)
+	}
+	if got := reloaded.GetHistory(0); len(got) != 1 || got[0].Content != "extract terms" {
+		t.Fatalf("logical history was not preserved: %#v", got)
+	}
+	if known := sm2.KnownAgentSessionIDs(); known == nil || len(known) != 0 {
+		t.Fatalf("KnownAgentSessionIDs after revision change = %#v, want empty filtered set", known)
+	}
+
+	// The migration writes the new revision immediately. A native ID created
+	// after that point must survive another restart with the same revision.
+	reloaded.SetAgentSessionID("native-session-c", "codex")
+	sm2.Save()
+	sm3 := NewSessionManager(path)
+	if got := sm3.GetOrCreateActive("bridge:user:conversation").GetAgentSessionID(); got != "native-session-c" {
+		t.Fatalf("AgentSessionID after second restart = %q, want native-session-c", got)
+	}
+}
+
+func TestSessionManager_MissingSkillsRevisionInvalidatesLegacyNativeSession(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	t.Setenv(skillsRevisionEnv, "")
+
+	sm1 := NewSessionManager(path)
+	session := sm1.GetOrCreateActive("bridge:user:legacy")
+	session.SetAgentSessionID("legacy-native-session", "claudecode")
+	session.AddHistory("user", "keep this")
+	sm1.Save()
+
+	t.Setenv(skillsRevisionEnv, "first-managed-revision")
+	sm2 := NewSessionManager(path)
+	reloaded := sm2.GetOrCreateActive("bridge:user:legacy")
+	if got := reloaded.GetAgentSessionID(); got != "" {
+		t.Fatalf("legacy AgentSessionID = %q, want empty", got)
+	}
+	if got := reloaded.GetHistory(0); len(got) != 1 || got[0].Content != "keep this" {
+		t.Fatalf("legacy logical history was not preserved: %#v", got)
+	}
+}
+
 func TestSessionManager_GetOrCreateActive_Persists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")
