@@ -25,9 +25,11 @@ mkdir -p workspaces/dianzhan skills
 
 `ANTHROPIC_BASE_URL` 必须是 Claude Code 所用的 Anthropic 兼容端点，
 `OPENAI_BASE_URL` 必须是 Codex 所用的 OpenAI 兼容端点（通常以 `/v1` 结尾）。
-配置会将 API Key 和 Base URL 分别绑定给 Claude Code 与 Codex。若上游指定模型名称，填入
-`ANTHROPIC_MODEL` 或 `CODEX_MODEL`；Codex 上游若仅支持 Chat Completions，则将
-`CODEX_WIRE_API` 从默认的 `responses` 改为 `chat`。
+配置会将 API Key 和 Base URL 分别绑定给 Claude Code 与 Codex。`ANTHROPIC_MODEL` 和
+`CODEX_MODEL` 必须填写：它们分别是两个 Provider 的默认模型，也是 `config.toml` 严格
+白名单中的首项。需要开放更多模型时，直接在对应的 `[[providers.models]]` 中增加条目；
+未列入白名单的模型不会出现在 Bridge 模型列表中，也不能通过请求或 `/model` 切换。Codex
+上游若仅支持 Chat Completions，则将 `CODEX_WIRE_API` 从默认的 `responses` 改为 `chat`。
 
 镜像由 GitHub Actions 构建并发布到 GHCR，服务器不执行 Docker build。将成功工作流输出的
 `ghcr.io/dz-translater/cc-connect-bridge@sha256:...` 写入 `.env` 的

@@ -1032,6 +1032,9 @@ func (c *Config) validateInternal(permissive bool) error {
 		if proj.Agent.Type == "" {
 			return fmt.Errorf("config: %s.agent.type is required", prefix)
 		}
+		if err := validateProjectProviderModels(prefix, proj); err != nil {
+			return err
+		}
 		// BridgePlatform is attached dynamically during startup, after the
 		// project engines are created. A Bridge-only deployment therefore has no
 		// static [[projects.platforms]] entries, but is still a valid runnable
@@ -1075,6 +1078,48 @@ func (c *Config) validateInternal(permissive bool) error {
 		}
 	}
 	return nil
+}
+
+// validateProjectProviderModels treats a non-empty provider model list as a
+// static allowlist. A configured default must be present in that list so a
+// deployment cannot start in a state where its selected model is unavailable.
+func validateProjectProviderModels(prefix string, proj ProjectConfig) error {
+	for i, raw := range proj.Agent.Providers {
+		provider := raw.ResolveForAgent(proj.Agent.Type)
+		if len(provider.Models) == 0 {
+			continue
+		}
+		for j, option := range provider.Models {
+			if strings.TrimSpace(option.Model) == "" {
+				return fmt.Errorf("config: %s.agent.providers[%d].models[%d].model must not be empty", prefix, i, j)
+			}
+		}
+		model := strings.TrimSpace(provider.Model)
+		if model == "" && proj.Agent.Options != nil {
+			if configured, ok := proj.Agent.Options["model"].(string); ok {
+				model = strings.TrimSpace(configured)
+			}
+		}
+		if model == "" {
+			return fmt.Errorf("config: %s.agent.providers[%d].model is required when models is configured", prefix, i)
+		}
+		if !providerModelInList(provider.Models, model) {
+			return fmt.Errorf("config: %s.agent.providers[%d].model %q must be included in models allowlist", prefix, i, model)
+		}
+	}
+	return nil
+}
+
+func providerModelInList(models []ProviderModelConfig, target string) bool {
+	for _, option := range models {
+		if strings.TrimSpace(option.Model) == target {
+			return true
+		}
+		if alias := strings.TrimSpace(option.Alias); alias != "" && strings.EqualFold(alias, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateDisplayConfig(prefix string, display *DisplayConfig) error {

@@ -535,6 +535,44 @@ func TestEffectiveDisplayHideAgentFooter(t *testing.T) {
 	}
 }
 
+func TestValidateProjectProviderModelAllowlist(t *testing.T) {
+	t.Run("default must be listed", func(t *testing.T) {
+		proj := validProject("demo")
+		proj.Agent.Providers = []ProviderConfig{{
+			Name:   "relay",
+			Model:  "gpt-5.4",
+			Models: []ProviderModelConfig{{Model: "gpt-5.3-codex"}},
+		}}
+		cfg := Config{Projects: []ProjectConfig{proj}}
+		err := cfg.validate()
+		assertErrContains(t, err, "must be included in models allowlist")
+	})
+
+	t.Run("listed default is accepted", func(t *testing.T) {
+		proj := validProject("demo")
+		proj.Agent.Providers = []ProviderConfig{{
+			Name:   "relay",
+			Model:  "gpt-5.4",
+			Models: []ProviderModelConfig{{Model: "gpt-5.3-codex"}, {Model: "gpt-5.4"}},
+		}}
+		cfg := Config{Projects: []ProjectConfig{proj}}
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("validate() error = %v", err)
+		}
+	})
+
+	t.Run("empty default is rejected", func(t *testing.T) {
+		proj := validProject("demo")
+		proj.Agent.Providers = []ProviderConfig{{
+			Name:   "relay",
+			Models: []ProviderModelConfig{{Model: "gpt-5.4"}},
+		}}
+		cfg := Config{Projects: []ProjectConfig{proj}}
+		err := cfg.validate()
+		assertErrContains(t, err, "model is required when models is configured")
+	})
+}
+
 func TestValidateProjectDisplayConfig(t *testing.T) {
 	mode := "verbose"
 	cardMode := "modern"

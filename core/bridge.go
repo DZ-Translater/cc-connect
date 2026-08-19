@@ -949,6 +949,14 @@ func (a *bridgeAdapter) handleMessage(raw json.RawMessage) {
 		slog.Warn("bridge: no engine for session", "platform", a.platform, "session_key", m.SessionKey, "project", m.Project)
 		return
 	}
+	if model != "" {
+		if policy, ok := ref.engine.agent.(ModelAllowlist); ok && !policy.IsModelAllowed(model) {
+			slog.Warn("bridge: rejected model outside configured allowlist",
+				"platform", a.platform, "session_key", m.SessionKey, "model", model)
+			a.rejectMessage(m, "model_not_allowed", "model is not allowed by provider configuration")
+			return
+		}
+	}
 
 	msg := &Message{
 		SessionKey:    m.SessionKey,
@@ -1304,6 +1312,9 @@ func (bs *BridgeServer) handleModels(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+	if policy, ok := ref.engine.agent.(ModelAllowlist); ok && selected != "" && !policy.IsModelAllowed(selected) {
+		selected = ""
 	}
 	bridgeJSON(w, http.StatusOK, map[string]any{
 		"models":   models,

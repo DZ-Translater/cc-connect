@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"testing"
 
 	"github.com/chenhg5/cc-connect/core"
@@ -39,6 +40,26 @@ func TestConfiguredModels_BoundaryConditions(t *testing.T) {
 				t.Fatalf("configuredModels() = %v, want %q", got, tt.wantName)
 			}
 		})
+	}
+}
+
+func TestAvailableModels_PrefersConfiguredAllowlist(t *testing.T) {
+	a := &Agent{
+		providers: []core.ProviderConfig{{
+			Model:  "waninter-openai/gpt-5.3-codex-spark",
+			Models: []core.ModelOption{{Name: "waninter-openai/gpt-5.3-codex-spark"}},
+		}},
+		activeIdx: 0,
+	}
+	got := a.AvailableModels(context.Background())
+	if len(got) != 1 || got[0].Name != "waninter-openai/gpt-5.3-codex-spark" {
+		t.Fatalf("AvailableModels() = %v, want configured allowlist", got)
+	}
+	if !a.IsModelAllowed("waninter-openai/gpt-5.3-codex-spark") {
+		t.Fatal("configured model should be allowed")
+	}
+	if a.IsModelAllowed("waninter-openai/gpt-5.6") {
+		t.Fatal("model outside configured allowlist should be rejected")
 	}
 }
 

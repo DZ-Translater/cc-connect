@@ -491,6 +491,15 @@ type ModelSwitcher interface {
 	AvailableModels(ctx context.Context) []ModelOption
 }
 
+// ModelAllowlist is an optional policy implemented by agents that support a
+// configuration-backed model allowlist. When the configured list is empty,
+// implementations should return true so normal provider discovery remains
+// available. Callers use this policy to reject untrusted model overrides before
+// they reach an Agent subprocess.
+type ModelAllowlist interface {
+	IsModelAllowed(model string) bool
+}
+
 // SessionModelStarter is an optional interface for agents that can start or
 // resume one session with an explicit model without changing the shared agent
 // default. Callers must prefer this over SetModel when a model choice belongs

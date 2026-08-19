@@ -903,10 +903,11 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassP
 # api_key = "sk-xxx"
 # base_url = "https://api.relay-service.com"
 # model = "claude-sonnet-4-20250514"
-# # Optional: pre-configure available models shown by /model command (alias - model)
+# # Optional: configure the model allowlist shown by /model command (alias - model).
+# # When non-empty, switches and Bridge requests for other models are rejected.
 # # /model switch [alias] switches to the model; omit to auto-fetch from the API.
 # # 可选：预先配置 /model 命令显示的可用模型列表，格式为 alias - model
-# # 使用 /model switch [alias] 切换模型；留空则自动从 API 获取
+# # 使用 /model switch [alias] 切换模型；未配置时才自动从 API 获取
 # [[projects.agent.providers.models]]
 # model = "claude-sonnet-4-20250514"
 # alias = "sonnet"
@@ -2186,4 +2187,3 @@ app_secret = "your-feishu-app-secret"
 # wps_sid = "your-wps-sid"             # WPS登录凭证 (Cookie中的wps_sid)
 # device_name = "cc-connect"           # 设备名称（可选）
 # device_uuid = ""                     # 设备UUID（可选，留空自动生成）
-

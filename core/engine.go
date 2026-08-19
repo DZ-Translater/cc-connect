@@ -3664,6 +3664,13 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	e.i18n.DetectAndSet(msg.Content)
 	session.AddHistory("user", msg.Content)
 	requestedModel := strings.TrimSpace(msg.ModelOverride)
+	if requestedModel != "" {
+		if policy, ok := agent.(ModelAllowlist); ok && !policy.IsModelAllowed(requestedModel) {
+			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError,
+				fmt.Errorf("model %q is not allowed by provider configuration", requestedModel)))
+			return
+		}
+	}
 	if requestedModel != "" && requestedModel != session.GetActiveModel() {
 		session.SetActiveModel(requestedModel)
 	}
@@ -9687,6 +9694,9 @@ func (e *Engine) switchModelOnAgent(agent Agent, target string, persistConfig bo
 	switcher, ok := agent.(ModelSwitcher)
 	if !ok {
 		return target, nil
+	}
+	if policy, ok := agent.(ModelAllowlist); ok && !policy.IsModelAllowed(target) {
+		return "", fmt.Errorf("model %q is not allowed by provider configuration", target)
 	}
 
 	providerSwitcher, ok := agent.(ProviderSwitcher)

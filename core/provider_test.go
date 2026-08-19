@@ -94,3 +94,29 @@ func TestSetProviderModel(t *testing.T) {
 		t.Fatalf("missing provider should leave copy unchanged, got %q want %q", updated[0].Model, providers[0].Model)
 	}
 }
+
+func TestIsModelAllowed(t *testing.T) {
+	models := []ModelOption{
+		{Name: "waninter-openai/gpt-5.3-codex-spark", Alias: "spark"},
+		{Name: "waninter-openai/gpt-5.6-sol"},
+	}
+	tests := []struct {
+		name   string
+		models []ModelOption
+		input  string
+		want   bool
+	}{
+		{name: "exact model", models: models, input: "waninter-openai/gpt-5.6-sol", want: true},
+		{name: "alias is case insensitive", models: models, input: "SPARK", want: true},
+		{name: "unknown model", models: models, input: "waninter-openai/gpt-5.4", want: false},
+		{name: "empty list keeps discovery open", models: nil, input: "provider/any-model", want: true},
+		{name: "empty input", models: models, input: " ", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsModelAllowed(tt.models, tt.input); got != tt.want {
+				t.Fatalf("IsModelAllowed(%v, %q) = %v, want %v", tt.models, tt.input, got, tt.want)
+			}
+		})
+	}
+}

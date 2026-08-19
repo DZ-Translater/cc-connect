@@ -1,5 +1,7 @@
 package core
 
+import "strings"
+
 // GetProviderModels returns the configured model options for the active provider.
 func GetProviderModels(providers []ProviderConfig, activeIdx int) []ModelOption {
 	if activeIdx < 0 || activeIdx >= len(providers) {
@@ -32,4 +34,25 @@ func SetProviderModel(providers []ProviderConfig, name, model string) ([]Provide
 		}
 	}
 	return updated, false
+}
+
+// IsModelAllowed reports whether model is present in a configured model list.
+// An empty list means that the provider has not opted into a static allowlist;
+// callers may then use the agent's normal discovery/fallback behavior.
+// Aliases are accepted case-insensitively, while model identifiers themselves
+// are matched exactly because provider model IDs can be case-sensitive.
+func IsModelAllowed(models []ModelOption, model string) bool {
+	target := strings.TrimSpace(model)
+	if target == "" || len(models) == 0 {
+		return true
+	}
+	for _, option := range models {
+		if strings.TrimSpace(option.Name) == target {
+			return true
+		}
+		if alias := strings.TrimSpace(option.Alias); alias != "" && strings.EqualFold(alias, target) {
+			return true
+		}
+	}
+	return false
 }

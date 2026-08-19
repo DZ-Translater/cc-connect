@@ -26,12 +26,28 @@ base_url = "${ANTHROPIC_BASE_URL}"
 model = "${ANTHROPIC_MODEL}"
 agent_types = ["claudecode"]
 
+# Non-empty models is a strict allowlist. Keep upstream model discovery out of
+# the Bridge UI and reject any message that requests a different model.
+[[providers.models]]
+model = "${ANTHROPIC_MODEL}"
+alias = "default"
+
 [[providers]]
 name = "dianzhan-codex"
 api_key = "${OPENAI_API_KEY}"
 base_url = "${OPENAI_BASE_URL}"
 model = "${CODEX_MODEL}"
 agent_types = ["codex"]
+
+# Non-empty models is a strict allowlist. Add a model here before exposing it
+# through the admin UI or Bridge API.
+[[providers.models]]
+model = "${CODEX_MODEL}"
+alias = "default"
+
+[[providers.models]]
+model = "waninter-openai/gpt-5.6-sol"
+alias = "sol"
 
 [providers.codex]
 wire_api = "${CODEX_WIRE_API}"

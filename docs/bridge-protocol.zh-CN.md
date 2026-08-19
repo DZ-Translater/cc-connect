@@ -695,8 +695,9 @@ Session key 遵循以下格式：
 
 #### GET /bridge/models
 
-列出指定项目当前上游可用的模型。提供 `session_key` 时，`selected` 优先返回
-该会话已经选择的模型；否则返回项目默认模型。
+列出指定项目配置允许的模型。提供 `session_key` 时，`selected` 优先返回该会话已经
+选择的模型；否则返回项目默认模型。若 Provider 未配置模型白名单，Agent 才会按其
+原有行为从上游发现或返回内置模型。
 
 **Query 参数：**
 

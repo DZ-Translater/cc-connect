@@ -6,10 +6,10 @@ services:
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:?set ANTHROPIC_BASE_URL in .env}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:?set ANTHROPIC_MODEL in .env (required by the model allowlist)}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:?set OPENAI_BASE_URL in .env}
-      CODEX_MODEL: ${CODEX_MODEL:-}
+      CODEX_MODEL: ${CODEX_MODEL:?set CODEX_MODEL in .env (required by the model allowlist)}
       CODEX_WIRE_API: ${CODEX_WIRE_API:-responses}
       CC_BRIDGE_TOKEN: ${CC_BRIDGE_TOKEN:?set CC_BRIDGE_TOKEN in .env}
       CC_INSTANCE_LOCK_DIR: /data/locks

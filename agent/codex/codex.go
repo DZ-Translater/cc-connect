@@ -210,10 +210,10 @@ func (a *Agent) configuredModels() []core.ModelOption {
 }
 
 func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
-	if models := readCodexModelCatalog(); len(models) > 0 {
+	if models := a.configuredModels(); len(models) > 0 {
 		return models
 	}
-	if models := a.configuredModels(); len(models) > 0 {
+	if models := readCodexModelCatalog(); len(models) > 0 {
 		return models
 	}
 	if models := a.fetchModelsFromAPI(ctx); len(models) > 0 {
@@ -230,6 +230,16 @@ func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
 		{Name: "gpt-4.1-nano", Desc: "GPT-4.1 Nano (fastest)"},
 		{Name: "codex-mini-latest", Desc: "Codex Mini (code-optimized)"},
 	}
+}
+
+// IsModelAllowed enforces the active provider's configured model list when it
+// is non-empty. An empty list deliberately keeps the existing discovery-based
+// behavior for deployments that have not opted into a static allowlist.
+func (a *Agent) IsModelAllowed(model string) bool {
+	a.mu.RLock()
+	models := core.GetProviderModels(a.providers, a.activeIdx)
+	a.mu.RUnlock()
+	return core.IsModelAllowed(models, model)
 }
 
 // nonChatSubstrings identifies non chat/completion modalities returned by
@@ -356,7 +366,6 @@ func readCodexCachedModels() []core.ModelOption {
 	return parseCodexModelsJSON(b)
 }
 
-
 // parseCodexModelsJSON parses a Codex models JSON file (model_catalog.json
 // or models_cache.json) into a deduplicated, filtered slice of ModelOption.
 // It is shared by readCodexCachedModels and readCodexModelCatalog.
@@ -401,7 +410,6 @@ func parseCodexModelsJSON(data []byte) []core.ModelOption {
 	}
 	return models
 }
-
 
 // readCodexModelCatalog reads $CODEX_HOME/config.toml to find the
 // model_catalog_json setting, then reads and parses that JSON file.

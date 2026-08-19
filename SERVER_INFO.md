@@ -24,9 +24,10 @@ ssh by
 cd /srv/cc-connect
 cp .env.example .env
 chmod 600 .env
-# Set ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, OPENAI_API_KEY,
-# OPENAI_BASE_URL, and CC_BRIDGE_TOKEN. Optional model and wire API settings
-# are documented in .env.example.
+# Set ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL,
+# OPENAI_API_KEY, OPENAI_BASE_URL, CODEX_MODEL, and CC_BRIDGE_TOKEN.
+# The model variables are required because they seed the strict allowlists in
+# config.toml; additional allowed models are declared there.
 ```
 
 The server never builds this image. Pull the GitHub Actions image first, then

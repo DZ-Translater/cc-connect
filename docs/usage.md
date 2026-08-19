@@ -247,7 +247,7 @@ alias = "spark"
 /model <alias>             Legacy syntax, still supported
 ```
 
-When `models` is configured, `/model` shows exactly that list without making an API round-trip. When omitted, models are fetched from the provider API or fall back to a built-in list.
+When a non-empty `models` list is configured, it is also a strict allowlist: `/model` shows exactly that list, no upstream model discovery is performed, and switches or Bridge requests for other models are rejected. When omitted, models are fetched from the provider API or fall back to a built-in list. The provider's default `model` must be included in the allowlist.
 
 ---
 
