@@ -977,7 +977,11 @@ func (a *bridgeAdapter) handleMessage(raw json.RawMessage) {
 	)
 
 	if ref.platform.handler != nil {
-		ref.platform.handler(ref.platform, msg)
+		// Keep the WebSocket read loop responsive while an Agent turn is
+		// running. Agent turns can legitimately take longer than the read
+		// deadline; dispatching synchronously would prevent JSON heartbeats
+		// from being consumed and make the adapter appear disconnected.
+		go ref.platform.handler(ref.platform, msg)
 	}
 }
 

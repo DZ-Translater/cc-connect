@@ -433,6 +433,52 @@ func TestBridge_ReplyTurnCompletionIsOptIn(t *testing.T) {
 	}
 }
 
+func TestBridge_MessageHandlerDoesNotBlockHeartbeats(t *testing.T) {
+	bs, wsURL := startTestBridge(t, "")
+	bp := bs.NewPlatform("test-proj")
+	e := NewEngine("test-proj", &stubAgent{}, []Platform{bp}, "", LangEnglish)
+	bs.RegisterEngine("test-proj", e, bp)
+
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	t.Cleanup(func() { close(releaseHandler) })
+	bp.handler = func(Platform, *Message) {
+		close(handlerStarted)
+		<-releaseHandler
+	}
+
+	conn := dialWS(t, wsURL, nil)
+	register(t, conn, "heartbeat-client", []string{"text"})
+	mustWriteJSON(t, conn, map[string]any{
+		"type":        "message",
+		"msg_id":      "m-heartbeat",
+		"session_key": "heartbeat-client:u1:u1",
+		"user_id":     "u1",
+		"content":     "long-running turn",
+		"reply_ctx":   "ctx-heartbeat",
+	})
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("message handler did not start")
+	}
+
+	// A long-running handler must not prevent the adapter read loop from
+	// consuming the JSON heartbeat used by the web-plugin client.
+	mustWriteJSON(t, conn, map[string]any{"type": "ping", "ts": time.Now().UnixMilli()})
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	var pong map[string]any
+	if err := conn.ReadJSON(&pong); err != nil {
+		t.Fatalf("read heartbeat response: %v", err)
+	}
+	if pong["type"] != "pong" {
+		t.Fatalf("heartbeat response type = %v, want pong", pong["type"])
+	}
+}
+
 func TestBridge_TurnCompletionFailureIsOptInAndSafe(t *testing.T) {
 	bs, wsURL := startTestBridge(t, "")
 	bp := bs.NewPlatform("test-proj")
