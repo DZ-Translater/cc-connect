@@ -46,7 +46,7 @@ model = "${CODEX_MODEL}"
 alias = "default"
 
 [[providers.models]]
-model = "waninter-openai/gpt-5.6-sol"
+model = "gpt-5.6-sol"
 alias = "sol"
 
 [providers.codex]
